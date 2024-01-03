@@ -34,11 +34,12 @@ struct MOLFiniteDifference{G,D} <: AbstractEquationSystemDiscretization
     disc_strategy::D
     useIR::Bool
     callbacks
+    verbose::Bool
     kwargs
 end
 
 # Constructors. If no order is specified, both upwind and centered differences will be 2nd order
-function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_scheme = UpwindScheme(), grid_align=CenterAlignedGrid(), discretization_strategy = ScalarizedDiscretization(), upwind_order = nothing, should_transform = true, use_ODAE = false, useIR = true, callbacks = [], kwargs...)
+function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_scheme = UpwindScheme(), grid_align=CenterAlignedGrid(), discretization_strategy = ScalarizedDiscretization(), upwind_order = nothing, should_transform = true, use_ODAE = false, useIR = true, verbose = false, callbacks = [], kwargs...)
     if upwind_order !== nothing
         @warn "`upwind_order` no longer does anything, and will be removed in a future release. See the docs for the current interface."
     end
@@ -56,7 +57,8 @@ function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_sche
 
     dxs = dxs isa Dict ? dxs : Dict(dxs)
 
-    return MOLFiniteDifference{typeof(grid_align), typeof(discretization_strategy)}(dxs, time, approx_order, advection_scheme, grid_align, should_transform, use_ODAE, discretization_strategy, useIR, callbacks, kwargs)
+    return MOLFiniteDifference{typeof(grid_align), typeof(discretization_strategy)}(dxs, time, approx_order, advection_scheme, grid_align, should_transform, use_ODAE, discretization_strategy, useIR, callbacks, verbose, kwargs)
 end
 
 PDEBase.get_time(disc::MOLFiniteDifference) = disc.time
+PDEBase.show_verbosemode(disc::MOLFiniteDifference) = disc.verbose

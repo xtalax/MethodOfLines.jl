@@ -120,6 +120,8 @@ end
 
     rules = safe_vcat(rules, reduce(safe_vcat, [vec([@rule /(*(~~b, ($(Differential(x))(*(~~a, $(Differential(x))(u), ~~d))), ~~c), ~e) => /(*(~b..., ~c..., cartesian_nonlinear_laplacian(*(~a..., ~d...), Idx(II, s, u, indexmap), derivweights, s, indexmap, bcmap, depvars, x, u)), replacevals(~e, s, u, depvars, II, indexmap)) for x in ivs(u, s)]) for u in depvars], init = []))
 
+    rules = safe_vcat(rules, reduce(safe_vcat, [vec([@rule /($(Differential(x))(*(~~a, $(Differential(x))(u), ~~d)), ~b) => /(cartesian_nonlinear_laplacian(*(~a..., ~d...), Idx(II, s, u, indexmap), derivweights, s, indexmap, bcmap, depvars, x, u), replacedvals(~b, s, u, depvars, II, indexmap)) for x in ivs(u, s)]) for u in depvars], init = []))
+
 
     nonlinlap_rules = []
     for t in terms
