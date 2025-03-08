@@ -1,5 +1,6 @@
 # Packages and inclusions
-using ModelingToolkit, MethodOfLines, LinearAlgebra, Test, OrdinaryDiffEq, NonlinearSolve, DomainSets
+using ModelingToolkit, MethodOfLines, LinearAlgebra, Test, OrdinaryDiffEq, NonlinearSolve,
+      DomainSets
 using ModelingToolkit: Differential
 
 @testset "Test 00a: Test solution interface, time dependent" begin
@@ -29,7 +30,8 @@ using ModelingToolkit: Differential
     # Method of lines discretization
     dx = dy = 2 / 8
     order = 1
-    discretization = MOLFiniteDifference([x => dx, y => dy], t; advection_scheme=WENOScheme())
+    discretization = MOLFiniteDifference(
+        [x => dx, y => dy], t; advection_scheme = WENOScheme())
     # explicitly specify upwind order
 
     # Convert the PDE problem into an ODE problem
@@ -37,27 +39,30 @@ using ModelingToolkit: Differential
 
     # Solve ODE problem
     using OrdinaryDiffEq
-    sol = solve(prob, FBDF(), saveat=0.1)
+    sol = solve(prob, FBDF(), saveat = 0.1)
 
     grid = get_discrete(pdesys, discretization)
-
 
     traditional_sol = zeros(Float64, length(sol.t), 9, 9)
 
     solu = sol.original_sol[grid[u(t, x, y)]]
 
-    for i in 1:length(sol.t)
-        for j in 1:9
-            for k in 1:9
-                traditional_sol[i, j, k] = solu[i][j, k]
+    for t_i in 1:length(sol.t)
+        for x_i in 2:9
+            for y_i in 2:9
+                traditional_sol[t_i, x_i, y_i] = solu[t_i][x_i, y_i]
             end
         end
     end
-
+    #periodic BCs are unknown to ODE, and thus to sol.original_sol
+    # so replace here
+    traditional_sol[:, :, 1] = traditional_sol[:, :, end]
+    traditional_sol[:, 1, :] = traditional_sol[:, end, :]
+    traditional_sol[:, 1, 1] .= 0.0 #corners pinned to zero
 
     @test sol[u(t, x, y)] == traditional_sol
 
-    @test sol(pi / 2, pi / 2, pi / 2; dv=u(t, x, y)) isa Float64
+    @test sol(pi / 2, pi / 2, pi / 2; dv = u(t, x, y)) isa Float64
     @test sol(pi / 2, pi / 2, :) isa Vector{Vector{Float64}}
     @test sol(pi / 2, :, :)[1] isa Matrix{Float64}
 
@@ -81,7 +86,6 @@ end
         u(x, 0) ~ x * y,
         u(x, 1) ~ x * y]
 
-
     # Space and time domains
     domains = [x ∈ Interval(0.0, 1.0),
         y ∈ Interval(0.0, 1.0)]
@@ -90,7 +94,7 @@ end
 
     # Note that we pass in `nothing` for the time variable `t` here since we
     # are creating a stationary problem without a dependence on time, only space.
-    discretization = MOLFiniteDifference([x => dx, y => dy], nothing, approx_order=2)
+    discretization = MOLFiniteDifference([x => dx, y => dy], nothing, approx_order = 2)
 
     prob = discretize(pdesys, discretization)
     sol = NonlinearSolve.solve(prob, NewtonRaphson())
@@ -101,7 +105,7 @@ end
 
     @test sol[u(x, y)] == solu
 
-    @test sol(pi / 4, pi / 4, dv=u(x, y)) isa Float64
+    @test sol(pi / 4, pi / 4, dv = u(x, y)) isa Float64
     @test sol(pi / 4, :)[1] isa Vector{Float64}
 
     @test (sol[x] == sol[y])

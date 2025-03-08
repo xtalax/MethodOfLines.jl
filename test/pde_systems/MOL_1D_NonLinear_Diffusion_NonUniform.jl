@@ -43,7 +43,8 @@ using StableRNGs
     # Method oflines discretization
     dx = 0:0.01:2
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
     discretization = MOLFiniteDifference([x => dx], t)
     prob = ModelingToolkit.discretize(pdesys, discretization)
@@ -52,14 +53,14 @@ using StableRNGs
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
 
-    @test sol.retcode == SciMLBase.ReturnCode.Success
+    @test SciMLBase.successful_retcode(sol)
 
     # Test against exact solution
     x_disc = sol[x]
     t_disc = sol[t]
     asf = [analytic_sol_func(t_disc[end], x) for x in x_disc]
     sol′ = sol[u(t, x)]
-    @test asf ≈ sol′[end, :] atol = 0.1
+    @test asf≈sol′[end, :] atol=0.1
 
     # Plots
     #using Plots
@@ -117,7 +118,6 @@ end
 #     sol′ = sol[u(t, x)][end, :]
 #     @test asf ≈ sol′ atol = 0.1
 
-
 #     # Plots
 #     #using Plots
 #     #plot(r_space, asf, seriestype = :scatter,label="analytic solution")
@@ -161,9 +161,10 @@ end
     # Method of lines discretization
     dx = 0:0.01:2
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
-    discretization = MOLFiniteDifference([x => dx], t, approx_order=2)
+    discretization = MOLFiniteDifference([x => dx], t, approx_order = 2)
     prob = ModelingToolkit.discretize(pdesys, discretization)
 
     #disco = MOLFiniteDifference_origial([x=>dx],t)
@@ -173,14 +174,14 @@ end
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
 
-    @test sol.retcode == SciMLBase.ReturnCode.Success
+    @test SciMLBase.successful_retcode(sol)
 
     # Test against exact solution
     x_disc = sol[x]
     t_disc = sol[t]
     asf = [analytic_sol_func(t_disc[end], x) for x in x_disc]
     sol′ = sol[u(t, x)]
-    @test asf ≈ sol′[end, :] atol = 0.1
+    @test asf≈sol′[end, :] atol=0.1
     # Plots
     #using Plots
     #plot(r_space, asf, seriestype = :scatter,label="analytic solution")
@@ -224,9 +225,10 @@ end
     # Method of lines discretization
     dx = 0:0.01:2
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
-    discretization = MOLFiniteDifference([x => dx], t, approx_order=4)
+    discretization = MOLFiniteDifference([x => dx], t, approx_order = 4)
     prob = ModelingToolkit.discretize(pdesys, discretization)
 
     #disco = MOLFiniteDifference_origial([x=>dx],t)
@@ -236,14 +238,14 @@ end
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
 
-    @test sol.retcode == SciMLBase.ReturnCode.Success
+    @test SciMLBase.successful_retcode(sol)
 
     # Test against exact solution
     x_disc = sol[x]
     t_disc = sol[t]
     asf = [analytic_sol_func(t_disc[end], x) for x in x_disc]
     sol′ = sol[u(t, x)]
-    @test asf ≈ sol′[end, :] atol = 0.1
+    @test asf≈sol′[end, :] atol=0.1
     # Plots
     #using Plots
     #plot(r_space, asf, seriestype = :scatter,label="analytic solution")
@@ -309,8 +311,6 @@ end
 
 # end
 
-
-
 @testset "Test 02: Dt(u(t,x)) ~ Dx(1. / (1. + u(t,x)^2) * Dx(u(t,x))) Neumann BCs" begin
 
     # Variables, parameters, and derivatives
@@ -345,7 +345,8 @@ end
     # Method of lines discretization
     dx = 0:0.01:0.8
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
     discretization = MOLFiniteDifference([x => dx], t)
     prob = ModelingToolkit.discretize(pdesys, discretization)
@@ -353,7 +354,7 @@ end
     # Solution of the ODE system
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
-    @test sol.retcode == SciMLBase.ReturnCode.Success
+    @test SciMLBase.successful_retcode(sol)
 
     # Test against exact solution
     x_disc = sol[x]
@@ -362,7 +363,7 @@ end
     sol′ = sol[u(t, x)]
 
     m = max(asf..., sol′[end, :]...)
-    @test asf / m ≈ sol′[end, :] / m atol = 0.16 # the difference occurs when tan(x) goes to infinite
+    @test asf / m≈sol′[end, :] / m atol=0.16 # the difference occurs when tan(x) goes to infinite
 
     # Plots
     #using Plots
@@ -405,7 +406,8 @@ end
     # Method of lines discretization
     dx = 0:0.01:0.8
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
     discretization = MOLFiniteDifference([x => dx], t)
     prob = ModelingToolkit.discretize(pdesys, discretization)
@@ -414,7 +416,7 @@ end
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
 
-    @test sol.retcode == SciMLBase.ReturnCode.Success
+    @test SciMLBase.successful_retcode(sol)
 
     # Test against exact solution
     x_disc = sol[x]
@@ -423,7 +425,7 @@ end
     sol′ = sol[u(t, x)]
 
     m = max(asf..., sol′[end, :]...)
-    @test asf / m ≈ sol′[end, :] / m atol = 0.16 # the difference occurs when tan(x) goes to infinite
+    @test asf / m≈sol′[end, :] / m atol=0.16 # the difference occurs when tan(x) goes to infinite
 
     # Plots
     #using Plots
@@ -433,7 +435,7 @@ end
 
 end
 
-@test_broken begin #@testset "Test 03: Dt(u(t,x)) ~ Dx(1. / (u(t,x)^2 - 1.) * Dx(u(t,x)))" begin
+@testset "Test 03: Dt(u(t,x)) ~ Dx(1. / (u(t,x)^2 - 1.) * Dx(u(t,x)))" begin
 
     # Variables, parameters, and derivatives
     @parameters t x
@@ -467,7 +469,8 @@ end
     # Method of lines discretization
     dx = 0:0.01:2
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
     discretization = MOLFiniteDifference([x => dx], t)
     prob = ModelingToolkit.discretize(pdesys, discretization)
@@ -476,27 +479,26 @@ end
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
 
-    @test_broken sol.retcode == SciMLBase.ReturnCode.Success
-    fail
+    @test_broken SciMLBase.successful_retcode(sol)
+
     # Test against exact solution
     x_disc = sol[x]
     t_disc = sol[t]
     asf = [analytic_sol_func(t_disc[end], x) for x in x_disc]
     sol′ = sol[u(t, x)]
-    @test asf ≈ sol′[end, :] atol = 0.1
+    @test asf≈sol′[end, :] atol=0.1
 
     m = max(asf..., sol′[end, :]...)
-    @test asf / m ≈ sol′[end, :] / m atol = 0.16 # the difference occurs when tan(x) goes to infinite
+    @test asf / m≈sol′[end, :] / m atol=0.16 # the difference occurs when tan(x) goes to infinite
 
     # Plots
     #using Plots
     #plot(r_space, asf, seriestype = :scatter,label="Analytic solution")
     #plot!(r_space, sol′, label="Numeric solution")
     #savefig("MOL_NonLinear_Diffusion_1D_Test03.png")
-
 end
 
-@test_broken begin #@testset "Test 03a: Dt(u(t,x)) ~ Dx(1. / (-1. + u(t,x)^2) * Dx(u(t,x)))" begin
+@testset "Test 03a: Dt(u(t,x)) ~ Dx(1. / (-1. + u(t,x)^2) * Dx(u(t,x)))" begin
 
     # Variables, parameters, and derivatives
     @parameters t x
@@ -529,7 +531,8 @@ end
     # Method of lines discretization
     dx = 0:0.01:2
     dx = collect(dx)
-    dx[2:end-1] .= dx[2:end-1] .+ rand(StableRNG(0), [0.001, -0.001], length(dx[2:end-1]))
+    dx[2:(end - 1)] .= dx[2:(end - 1)] .+
+                       rand(StableRNG(0), [0.001, -0.001], length(dx[2:(end - 1)]))
 
     discretization = MOLFiniteDifference([x => dx], t)
     prob = ModelingToolkit.discretize(pdesys, discretization)
@@ -538,8 +541,8 @@ end
     using OrdinaryDiffEq
     sol = solve(prob, Rosenbrock32())
 
-    @test_broken sol.retcode == SciMLBase.ReturnCode.Success
-    fail
+    @test_broken SciMLBase.successful_retcode(sol)
+
     # Test against exact solution
     x_disc = sol[x]
     t_disc = sol[t]
@@ -547,7 +550,7 @@ end
     sol′ = sol[u(t, x)]
 
     m = max(asf..., sol′[end, :]...)
-    @test asf / m ≈ sol′[end, :] / m atol = 0.16 # the difference occurs when tan(x) goes to infinite
+    @test asf / m≈sol′[end, :] / m atol=0.16 # the difference occurs when tan(x) goes to infinite
 
     # Plots
     #using Plots

@@ -3,20 +3,31 @@ using LinearAlgebra
 using SciMLBase
 using DiffEqBase
 using ModelingToolkit
-using ModelingToolkit: operation, istree, arguments, variable, get_metadata, get_states,
+using ModelingToolkit: operation, iscall, arguments, variable, get_metadata, get_unknowns,
 parameters, defaults, varmap_to_vars
+using SymbolicIndexingInterface
 using SymbolicUtils, Symbolics
-using Symbolics: unwrap, solve_for, expand_derivatives, diff2term, setname, rename, similarterm
+using Symbolics: unwrap, symbolic_linear_solve, expand_derivatives, diff2term, setname, rename
 using SymbolicUtils: operation, arguments
 using IfElse
 using StaticArrays
 using Interpolations
 using Latexify
-import DomainSets
+using PrecompileTools
+using DomainSets
+using RuntimeGeneratedFunctions
+RuntimeGeneratedFunctions.init(@__MODULE__)
 
 # See here for the main `symbolic_discretize` and `generate_system` functions
 using PDEBase
-using PDEBase: unitindices, unitindex, remove, insert, sym_dot, VariableMap, depvar, x2i, d_orders, vcat!
+using PDEBase: unitindices, unitindex, remove, insert, sym_dot, VariableMap, depvar, x2i,
+               d_orders, vcat!, update_varmap!, get_ops
+
+# staggered changes
+using PDEBase: cardinalize_eqs!, make_pdesys_compatible, parse_bcs, generate_system,
+               Interval
+using PDEBase: error_analysis, add_metadata!
+
 # To Extend
 import PDEBase.interface_errors
 import PDEBase.check_boundarymap
@@ -29,6 +40,7 @@ import PDEBase.construct_differential_discretizer
 import PDEBase.discretize_equation!
 import PDEBase.generate_ic_defaults
 import PDEBase.generate_metadata
+import PDEBase.symbolic_discretize
 
 import PDEBase.get_time
 import PDEBase.get_eqvar
@@ -43,9 +55,12 @@ import Base.checkbounds
 import Base.getproperty
 import Base.ndims
 
+import SciMLBase.discretize
+
 # Interface
 include("interface/grid_types.jl")
 include("interface/scheme_types.jl")
+include("interface/callbacks.jl")
 include("interface/disc_strategy_types.jl")
 include("interface/MOLFiniteDifference.jl")
 
@@ -68,6 +83,7 @@ include("discretization/schemes/upwind_difference/upwind_diff_weights.jl")
 include("discretization/schemes/half_offset_weights.jl")
 include("discretization/schemes/extrapolation_weights.jl")
 include("discretization/differential_discretizer.jl")
+include("discretization/schemes/callbacks/callback_rules.jl")
 
 # System Parsing
 include("system_parsing/pde_system_transformation.jl")
@@ -78,6 +94,7 @@ include("discretization/interface_boundary.jl")
 # Schemes
 include("discretization/schemes/function_scheme/function_scheme.jl")
 include("discretization/schemes/centered_difference/centered_difference.jl")
+include("discretization/schemes/2nd_order_mixed_deriv/2nd_order_mixed_deriv.jl")
 include("discretization/schemes/upwind_difference/upwind_difference.jl")
 include("discretization/schemes/half_offset_centred_difference.jl")
 include("discretization/schemes/nonlinear_laplacian/nonlinear_laplacian.jl")
@@ -89,12 +106,18 @@ include("discretization/schemes/integral_expansion/integral_expansion.jl")
 include("discretization/generate_finite_difference_rules.jl")
 include("discretization/generate_bc_eqs.jl")
 include("discretization/generate_ic_defaults.jl")
+include("discretization/staggered_discretize.jl")
 
 # Main
 include("scalar_discretization.jl")
 include("MOL_discretization.jl")
 
-export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace
-export UpwindScheme, WENOScheme, FunctionalScheme
+## PrecompileTools
+include("precompile.jl")
+
+# Export
+export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code,
+       grid_align, edge_align, center_align, get_discrete, chebyspace
+export UpwindScheme, WENOScheme, FunctionalScheme, MOLDiscCallback
 
 end
