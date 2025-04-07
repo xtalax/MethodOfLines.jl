@@ -23,7 +23,7 @@ A discretization algorithm.
 - `kwargs`: Any other keyword arguments you want to pass to the `ODEProblem`.
 
 """
-struct MOLFiniteDifference{G,D} <: DiffEqBase.AbstractDiscretization
+struct MOLFiniteDifference{G,D} <: PDEBase.AbstractEquationSystemDiscretization
     dxs
     time
     approx_order::Int
