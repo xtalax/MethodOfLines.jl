@@ -52,3 +52,5 @@ function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_sche
 
     return MOLFiniteDifference{typeof(grid_align), typeof(discretization_strategy)}(dxs, time, approx_order, advection_scheme, grid_align, should_transform, use_ODAE, discretization_strategy, verbose_schemes, kwargs)
 end
+
+PDEBase.get_time(disc::MOLFiniteDifference) = disc.time

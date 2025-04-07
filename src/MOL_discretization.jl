@@ -7,10 +7,10 @@ indvars = v.x̄
 for x in indvars
     @assert haskey(discretization.dxs, Num(x))||haskey(discretization.dxs, x) "Variable $x has no step size"
 end
-if !any(s -> discretization.advection_scheme isa s, [UpwindScheme, FunctionalScheme])
-    throw(ArgumentError("Only `UpwindScheme()` and `FunctionalScheme()` are supported advection schemes. Got $(typeof(discretization.advection_scheme))."))
+if !any(s -> discretization.advection_scheme isa s, [UpwindScheme])
+    throw(ArgumentError("Only `UpwindScheme()` are supported advection schemes. Got $(typeof(discretization.advection_scheme))."))
 end
-if !(typeof(discretization.disc_strategy) ∈ [ScalarizedDiscretization])
+if !(typeof(discretization.disc_strategy) ∈ [ScalarizedDiscretization, ArrayDiscretization])
     throw(ArgumentError("Only `ScalarizedDiscretization()` are supported discretization strategies."))
 end
 end

@@ -3,6 +3,7 @@ using LinearAlgebra
 using SciMLBase
 using DiffEqBase
 using PDEBase
+import PDEBase: get_time
 using ModelingToolkit
 using ModelingToolkit: operation, istree, arguments, variable, get_metadata, get_unknowns
 using SymbolicUtils, Symbolics
