@@ -1,4 +1,8 @@
-function discretize_equation!(alleqs, bceqs, pde, interiormap, eqvar, bcmap, depvars, s, derivweights, indexmap, ::ArrayDiscretization, verbose)
+function PDEBase.discretize_equation!(
+    disc_state::PDEBase.EquationState, pde::Equation, interiormap,
+    eqvar, bcmap, depvars, s::DiscreteSpace, derivweights, indexmap,
+    discretization::MOLFiniteDifference{G, D}) where {G, D <: ArrayDiscretization}
+    verbose = discretization.verbose_schemes
     # Handle boundary values appearing in the equation by creating functions that map each point on the interior to the correct replacement rule
 
     # Find boundaries for this equation
