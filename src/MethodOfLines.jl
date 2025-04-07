@@ -99,7 +99,7 @@ include("interface/solution/timeindep.jl")
 
 # Main
 include("error_analysis.jl")
-include("MOL_discretization.jl")
+
 
 export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace
 
