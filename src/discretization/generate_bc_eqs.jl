@@ -1,5 +1,5 @@
 @inline function generate_bc_eqs!(bceqs, s, boundaryvalfuncs, interiormap, boundary::AbstractTruncatingBoundary)
-    args = params(depvar(boundary.u, s), s)
+    args = ivs(depvar(boundary.u, s), s)
     indexmap = Dict([args[i]=>i for i in 1:length(args)])
     push!(bceqs, generate_bc_eqs(s, boundaryvalfuncs, boundary, interiormap, indexmap))
 end
@@ -25,7 +25,7 @@ end
 
 function generate_boundary_val_funcs(s, depvars, boundarymap, indexmap, derivweights)
     return mapreduce(vcat, values(boundarymap)) do boundaries
-        map(mapreduce(x -> boundaries[x], vcat, s.x̄)) do b
+        map(mapreduce(x -> boundaries[x], vcat, s.ivs)) do b
             # No interface values in equations
             if b isa InterfaceBoundary
                 II -> []
@@ -48,7 +48,7 @@ function boundary_value_maps(II::CartesianIndex, s::DiscreteSpace{N,M,G}, bounda
     # replace u(t,0) with u₁, etc
 
     u = depvar(u_, s)
-    args = params(u, s)
+    args = ivs(u, s)
     j = findfirst(isequal(x_), args)
     IIold = II
     # We need to construct a new index in case the value at the boundary appears in an equation one dimension lower
@@ -99,7 +99,7 @@ function boundary_value_maps(II::CartesianIndex, s::DiscreteSpace{N,M,G}, bounda
 
     # * Assume that the BC is in terms of an explicit expression, not containing references to variables other than u_ at the boundary
     u = depvar(u_, s)
-    args = params(u, s)
+    args = ivs(u, s)
     j = findfirst(isequal(x_), args)
     IIold = II
     # We need to construct a new index in case the value at the boundary appears in an equation one dimension lower
@@ -136,7 +136,7 @@ function boundary_value_maps(II::CartesianIndex, s::DiscreteSpace{N,M,G}, bounda
 end
 
 
-function generate_bc_eqs(s::DiscreteSpace{N,M,G}, boundaryvalfuncs, boundary::AbstractEquationBoundary, interiormap, indexmap) where {N, M, G}
+function generate_bc_eqs(s::DiscreteSpace{N,M,G}, boundaryvalfuncs, boundary::AbstractTruncatingBoundary, interiormap, indexmap) where {N, M, G}
     bc = boundary.eq
     return vec(map(edge(s, boundary, interiormap)) do II
         boundaryvalrules = mapreduce(f -> f(II), vcat, boundaryvalfuncs)
@@ -155,7 +155,7 @@ Pads the boundaries with extrapolation equations, extrapolated with 6th order la
 Reuses `central_difference` as this already dispatches the correct stencil, given a `DerivativeOperator` which contains the correct weights.
 """
 function generate_extrap_eqs!(eqs, pde, u, s, derivweights, interiormap, bcmap)
-    args = params(u, s)
+    args = ivs(u, s)
     length(args) == 0 && return
 
     lowerextents, upperextents = interiormap.stencil_extents[pde]

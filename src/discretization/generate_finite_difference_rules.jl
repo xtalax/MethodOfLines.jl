@@ -46,7 +46,7 @@ Please submit an issue if you know of any special cases which impact stability o
 """
 function generate_finite_difference_rules(II::CartesianIndex, s::DiscreteSpace, depvars, pde::Equation, derivweights::DifferentialDiscretizer, bmap, indexmap)
 
-    terms = split_terms(pde, s.x̄)
+    terms = split_terms(pde, s.ivs)
     if length(II) != 0
         # Standard cartesian centered difference scheme
         central_deriv_rules_cartesian = generate_cartesian_rules(II, s, depvars, derivweights, bmap, indexmap, terms)
@@ -89,7 +89,7 @@ function generate_finite_difference_rules(interior, s::DiscreteSpace, depvars,
                                           bmap, indexmap)
 
 
-    terms = split_terms(pde, s.x̄)
+    terms = split_terms(pde, s.ivs)
     if length(values(interior)) != 0
         # Standard cartesian centered difference scheme
         central_deriv_rules_cartesian = generate_cartesian_rules(interior, s, depvars, derivweights, bmap, indexmap, terms)

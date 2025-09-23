@@ -10,7 +10,7 @@ struct DifferentialDiscretizer{T, D1, S}
     boundary::Dict{Num,DerivativeOperator}
 end
 
-function DifferentialDiscretizer(pdesys, s, discretization, orders)
+function PDEBase.construct_differential_discretizer(pdesys, s::DiscreteSpace, discretization, orders)
     pdeeqs = pdesys.eqs isa Vector ? pdesys.eqs : [pdesys.eqs]
     bcs = pdesys.bcs isa Vector ? pdesys.bcs : [pdesys.bcs]
     approx_order = discretization.approx_order
@@ -25,7 +25,7 @@ function DifferentialDiscretizer(pdesys, s, discretization, orders)
     interp = []
     boundary = []
     # TODO: Make sure that only nessecary orders are calculated, this is the lowest hanging performance fruit.
-    for x in s.x̄
+    for x in s.ivs
         orders_ = orders[x]
         _orders = Set(vcat(orders_, [1, 2]))
 

@@ -30,7 +30,7 @@ function transform_pde_system!(v, boundarymap, sys::PDESystem)
         end
     end
 
-    sys = PDESystem(eqs, bcs, sys.domain, sys.ivs, Num.(v.ū), sys.ps, name=sys.name)
+    sys = PDESystem(eqs, bcs, sys.domain, sys.ivs, Num.(v.dvs), sys.ps, name=sys.name)
     return sys
 end
 
@@ -127,14 +127,8 @@ function descend_to_incompatible(term, v)
         op = SU.operation(term)
         if op isa Differential
             if any(isequal(op.x), all_ivs(v))
-                nonlinlapterm = nonlinlap_check(arguments(term)[1], op)
-
-                if nonlinlapterm !== nothing
-                    badterm, shouldexpand = check_deriv_arg(nonlinlapterm, v)
-                else
-                    badterm, shouldexpand = filter_equivalent_differentials(term, op, v)
-                end
-
+                badterm, shouldexpand = filter_equivalent_differentials(term, op, v)
+            
                 if badterm !== nothing
                     return (term, badterm, shouldexpand)
                 else
@@ -144,7 +138,7 @@ function descend_to_incompatible(term, v)
                 throw(ArgumentError("Variable derived with respect to is not an independent variable in ivs, got $(op.x) in $(term)"))
             end
         elseif op isa Integral
-            if any(isequal(op.domain.variables), v.x̄)
+            if any(isequal(op.domain.variables), v.ivs)
                 euler = isequal(op.domain.domain.left, v.intervals[op.domain.variables][1]) && isequal(op.domain.domain.right, Num(op.domain.variables))
                 whole = isequal(op.domain.domain.left, v.intervals[op.domain.variables][1]) && isequal(op.domain.domain.right, v.intervals[op.domain.variables][2])
                 if any([euler, whole])

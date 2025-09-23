@@ -4,7 +4,7 @@
 
 function _upwind_difference(D, ranges, interior, is, s,
                             bs, jx, u, udisc, ispositive)
-    args = params(u, s)
+    args = ivs(u, s)
 
     j, x = jx
     lenx = length(s, x)
@@ -80,7 +80,7 @@ end
                           for d in (let orders = derivweights.orders[x]
                                        setdiff(orders[isodd.(orders)], skip)
                                    end)]
-                         for x in params(u, s)], init = [])
+                         for x in ivs(u, s)], init = [])
                 for u in depvars], init = []),
 
         #Catch division and multiplication, see issue #1
@@ -95,7 +95,7 @@ end
                                         setdiff(orders[isodd.(orders)], skip)
 
                                    end)]
-                         for x in params(u, s)], init = [])
+                         for x in ivs(u, s)], init = [])
                 for u in depvars], init = [])
     )
 
@@ -111,7 +111,7 @@ end
     end
 
     return safe_vcat(wind_rules, vec(mapreduce(safe_vcat, depvars) do u
-        mapreduce(safe_vcat, params(u, s), init = []) do x
+        mapreduce(safe_vcat, ivs(u, s), init = []) do x
             j = x2i(s, u, x)
             is = get_is(u, s)
             uinterior = get_interior(u, s, interior)

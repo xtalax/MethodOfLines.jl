@@ -54,7 +54,7 @@ end
 
 function _get_gridloc(s, ut, is...)
     u = Sym{SymbolicUtils.FnType{Tuple, Real}}(nameof(operation(ut)))
-    u = operation(s.ū[findfirst(isequal(u), operation.(s.ū))])
+    u = operation(s.dvs[findfirst(isequal(u), operation.(s.dvs))])
     args = remove(s.args[u], s.time)
     gridloc = map(enumerate(args)) do (i, x)
         s.grid[x][is[i]]
@@ -72,21 +72,21 @@ end
 
 
 function generate_function_from_gridlocs(analyticmap, gridlocs, s)
-    is_t_first_map = Dict(map(s.ū) do u
+    is_t_first_map = Dict(map(s.dvs) do u
         operation(u) => (findfirst(x -> isequal(s.time, x), arguments(u)) == 1)
     end)
 
-    opsmap = Dict(map(s.ū) do u
+    opsmap = Dict(map(s.dvs) do u
         operation(u) => u
     end)
 
-    fs_ = map(gridlocs) do (uop, x̄)
+    fs_ = map(gridlocs) do (uop, ivs)
         is_t_first = is_t_first_map[uop]
         _f = analyticmap[opsmap[uop]]
         if is_t_first
-            return t -> _f(t, x̄...)
+            return t -> _f(t, ivs...)
         else
-            return t -> _f(x̄..., t)
+            return t -> _f(ivs..., t)
         end
     end
 
@@ -100,7 +100,7 @@ end
 function newindex(u_, II, s, indexmap)
     u = depvar(u_, s)
     args_ = remove(arguments(u_), s.time)
-    args = params(u, s)
+    args = ivs(u, s)
     is = map(enumerate(args_)) do (j, x)
         if haskey(indexmap, x)
             II[indexmap[x]]

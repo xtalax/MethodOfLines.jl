@@ -3,7 +3,7 @@ function discretize_equation!(alleqs, bceqs, pde, interiormap, eqvar, bcmap, dep
     # Generate replacement rule gen closures for the boundary values like u(t, 1)
     boundaryvalfuncs = generate_boundary_val_funcs(s, depvars, bcmap, indexmap, derivweights)
     # Find boundaries for this equation
-    eqvarbcs = mapreduce(x -> bcmap[operation(eqvar)][x], vcat, s.x̄)
+    eqvarbcs = mapreduce(x -> bcmap[operation(eqvar)][x], vcat, s.ivs)
     # Generate the boundary conditions for the correct variable
     for boundary in eqvarbcs
         generate_bc_eqs!(bceqs, s, boundaryvalfuncs, interiormap, boundary)

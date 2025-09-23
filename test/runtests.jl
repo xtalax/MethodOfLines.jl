@@ -30,6 +30,9 @@ const is_TRAVIS = haskey(ENV, "TRAVIS")
         @time @safetestset "ODEFunction" begin
             include("components/ODEFunction_test.jl")
         end
+        @time @safetestset "fold_ranges" begin
+            include("components/fold_ranges_test.jl")
+        end
         #@time @safetestset "Finite Difference Schemes" begin include("components/finite_diff_schemes.jl") end
     end
 

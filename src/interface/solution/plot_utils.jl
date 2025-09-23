@@ -5,7 +5,7 @@ function quick_animate(sol::SciMLBase.PDETimeseriesSolution, u)
     @assert ndims(solu) == 2 "Only 2D (1 space, 1 time) solutions are supported for animation."
 
     t = s.time
-    discx̄ = map(remove(arguments(u), t)) do x
+    discivs = map(remove(arguments(u), t)) do x
         sol[x]
     end
 
@@ -19,7 +19,7 @@ function quick_animate(sol::SciMLBase.PDETimeseriesSolution, u)
                 Colon()
             end
         end
-        plot(discx̄..., solu[indices...])
+        plot(discivs..., solu[indices...])
     end
     return anim
 end

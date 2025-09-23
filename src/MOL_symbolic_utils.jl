@@ -134,10 +134,10 @@ end
 
 # Additional handling to get around limitations in rules
 # Splits out derivatives from containing math expressions for ingestion by the rules
-function _split_terms(term, x̄)
+function _split_terms(term, ivs)
     S = Symbolics
     SU = SymbolicUtils
-    st(t) = _split_terms(t, x̄)
+    st(t) = _split_terms(t, ivs)
     # TODO: Update this to handle more ops e.g. exp sin tanh etc.
     # TODO: Handle cases where two nonlinear laplacians are multiplied together
     if S.istree(term)
@@ -203,9 +203,9 @@ function _split_terms(term, x̄)
     end
 end
 
-function split_terms(eq::Equation, x̄)
-    lhs = _split_terms(eq.lhs, x̄)
-    rhs = _split_terms(eq.rhs, x̄)
+function split_terms(eq::Equation, ivs)
+    lhs = _split_terms(eq.lhs, ivs)
+    rhs = _split_terms(eq.rhs, ivs)
     return filter(term -> !isequal(term, Num(0)), flatten_division.(vcat(lhs, rhs)))
 end
 

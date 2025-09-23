@@ -6,14 +6,14 @@ function PDEBase.discretize_equation!(
     # Handle boundary values appearing in the equation by creating functions that map each point on the interior to the correct replacement rule
 
     # Find boundaries for this equation
-    eqvarbcs = mapreduce(x -> bcmap[operation(eqvar)][x], vcat, s.x̄)
+    eqvarbcs = mapreduce(x -> bcmap[operation(eqvar)][x], vcat, s.ivs)
     # Extract Interior
     interior = interiormap.I[pde]
 
     # Generate the boundary conditions for the correct variable
     boundary_op_pairs = generate_bc_op_pairs(s, eqvarbcs, derivweights, interior)
     boundary_rules = mapreduce(b -> boundary_value_rules(interior, s, b, derivweights),
-                               safe_vcat, no_interp(flatten_vardict(bcmap)), init = [])
+                               safe_vcat, filter_extending(flatten_vardict(bcmap)), init = [])
 
     # Generate the discrete form ODEs for the interior
     pdeinterior = begin
@@ -25,6 +25,7 @@ function PDEBase.discretize_equation!(
             println("Schemes Applied: The following rules were applied for the PDE $pde with the var $eqvar:")
         end
         try
+            #fold(broadcast_substitute(pde.lhs, rules, verbose), verbose)
             broadcast_substitute(pde.lhs, rules, verbose)
         catch e
             println("A scheme has been incorrectly applied to the following equation: $pde.\n")
@@ -40,7 +41,26 @@ function PDEBase.discretize_equation!(
     eqarray = ArrayMaker{Real}(Tuple(last.(ranges)), vcat(Tuple(ranges) => bg,
                                               Tuple(interior) => pdeinterior,
                                               boundary_op_pairs))
-    push!(alleqs, eqarray)
+    safe_show(eqarray)
+
+    push!(disc_state.eqs, eqarray)
+end
+
+function safe_show(term)
+    if istree(term)
+        args = arguments(term)
+        @show operation(term)
+        for (i, arg) in enumerate(args)
+            try
+                @show i, arg
+            catch e
+                println("Faliure with argument $i")
+                safe_show.(args)
+            end
+        end
+    else
+        @show term
+    end
 end
 
 # function generate_system(alleqs, bceqs, ics, discvars, defaults, ps, tspan, metadata)

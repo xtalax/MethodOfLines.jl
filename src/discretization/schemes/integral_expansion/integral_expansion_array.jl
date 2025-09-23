@@ -29,7 +29,7 @@ end
 @inline function generate_euler_integration_rules(interior, s::DiscreteSpace, depvars, indexmap, terms)
     eulerrules = reduce(safe_vcat, [[Integral(x in DomainSets.ClosedInterval(s.vars.intervals[x][1], Num(x)))(u) =>
                                          euler_integral(interior, s, (x2i(s, u, x), x), u, s.discvars[u])
-                                     for x in params(u, s)]
+                                     for x in ivs(u, s)]
                                     for u in depvars], init = [])
     return eulerrules
 end
@@ -38,7 +38,7 @@ end
     wholedomainrules = reduce(safe_vcat,
                               [[Integral(x in DomainSets.ClosedInterval(s.vars.intervals[x][1], s.vars.intervals[x][2]))(u) =>
                                     whole_domain_integral(interior, s, (x2i(s, u, x), x), u, s.discvars[u])
-                                for x in filter(x -> (!haskey(indexmap, x) | isequal(x, bvar)), params(u, s))]
+                                for x in filter(x -> (!haskey(indexmap, x) | isequal(x, bvar)), ivs(u, s))]
                                for u in depvars],
                               init = [])
 

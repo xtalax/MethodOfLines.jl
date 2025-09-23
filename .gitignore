@@ -8,6 +8,8 @@ plots
 plots/*
 src/scratch
 src/scratch/*
+scratch
+scratch/*
 test/plots
 test/plots/*
 dev

@@ -2,8 +2,8 @@
 
 function PDEBase.interface_errors(
     pdesys::PDESystem, v::PDEBase.VariableMap, discretization::MOLFiniteDifference)
-depvars = v.ū
-indvars = v.x̄
+depvars = v.dvs
+indvars = v.ivs
 for x in indvars
     @assert haskey(discretization.dxs, Num(x))||haskey(discretization.dxs, x) "Variable $x has no step size"
 end
@@ -63,57 +63,9 @@ disc_state = PDEBase.construct_disc_state(discretization)
 s = PDEBase.construct_discrete_space(v, discretization)
 
 return Dict(vcat(
-    [Num(x) => s.grid[x] for x in s.x̄], [Num(u) => s.discvars[u] for u in s.ū]))
+    [Num(x) => s.grid[x] for x in s.ivs], [Num(u) => s.discvars[u] for u in s.dvs]))
 end
 
-function ModelingToolkit.ODEFunctionExpr(
-    pdesys::PDESystem, discretization::MethodOfLines.MOLFiniteDifference)
-sys, tspan = SciMLBase.symbolic_discretize(pdesys, discretization)
-try
-    if tspan === nothing
-        @assert true "Codegen for NonlinearSystems is not yet implemented."
-    else
-        simpsys = structural_simplify(sys)
-        return ODEFunctionExpr(simpsys)
-    end
-catch e
-    println("The system of equations is:")
-    println(sys.eqs)
-    println()
-    println("Discretization failed, please post an issue on https://github.com/SciML/MethodOfLines.jl with the failing code and system at low point count.")
-    println()
-    rethrow(e)
-end
-end
-
-function SciMLBase.ODEFunction(
-    pdesys::PDESystem, discretization::MethodOfLines.MOLFiniteDifference;
-    analytic = nothing, kwargs...)
-sys, tspan = SciMLBase.symbolic_discretize(pdesys, discretization)
-try
-    if tspan === nothing
-        @assert true "Codegen for NonlinearSystems is not yet implemented."
-    else
-        simpsys = structural_simplify(sys)
-        if analytic !== nothing
-            analytic = analytic isa Dict ? analytic : Dict(analytic)
-            s = getfield(sys, :metadata).discretespace
-            us = get_unknowns(simpsys)
-            gridlocs = get_gridloc.(us, (s,))
-            f_analytic = generate_function_from_gridlocs(analytic, gridlocs, s)
-        end
-        return ODEFunction(simpsys; analytic = f_analytic, eval_module = @__MODULE__,
-            discretization.kwargs..., kwargs...)
-    end
-catch e
-    println("The system of equations is:")
-    println(sys.eqs)
-    println()
-    println("Discretization failed, please post an issue on https://github.com/SciML/MethodOfLines.jl with the failing code and system at low point count.")
-    println()
-    rethrow(e)
-end
-end
 
 function generate_code(
     pdesys::PDESystem, discretization::MethodOfLines.MOLFiniteDifference,

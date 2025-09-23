@@ -3,7 +3,7 @@
 ########################################################################################
 
 function central_difference(D::DerivativeOperator, interior, s, bs, jx, u, udisc)
-    args = params(u, s)
+    args = ivs(u, s)
     interior = get_interior(u, s, interior)
     ranges = get_ranges(u, s)
     is = get_is(u, s)
@@ -27,7 +27,7 @@ function central_difference(D::DerivativeOperator, interior, s, bs, jx, u, udisc
     end
     boundaryoppairs = safe_vcat(lowerops, upperops)
 
-    interiorop = interior_deriv(D, udisc, s, half_range(D.stencil_length), j, is, interior, bs)
+    interiorop = interior_deriv(D, bwrap(udisc, bs, s, j, false), s, half_range(D.stencil_length), j, is, interior, bs)
 
     return NullBG_ArrayMaker(ranges, safe_vcat([Tuple(interior) => interiorop], boundaryoppairs))[interior...]
 end
@@ -42,6 +42,6 @@ end
                              for d in (let orders = derivweights.orders[x]
                                            orders[iseven.(orders)]
                                        end)]
-                           for x in params(u, s)], init = [])
+                           for x in ivs(u, s)], init = [])
                     for u in depvars], init = [])
 end

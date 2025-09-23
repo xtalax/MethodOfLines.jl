@@ -1,23 +1,20 @@
-struct RefCartesianIndex{N,AType} <: Base.AbstractCartesianIndex{N}
-    I::CartesianIndex{N}
+struct RefCartesianIndex{IType,AType,N} <: Base.AbstractCartesianIndex{N}
+    I::IType
     A::AType
-    RefCartesianIndex(I::CartesianIndex{N}, A=nothing) where {N} = new{N,typeof(A)}(I, A)
+    RefCartesianIndex(I::IType, A=nothing) where {IType,AType} = new{IType,typeof(A),length(I)}(I, A)
 end
-
+Base.length(IR::SymbolicUtils.BasicSymbolic{CartesianIndex}) = length(arguments(IR))
+Base.length(IR::RefCartesianIndex) = length(IR.I)
 Base.getindex(A::AbstractArray, IR::RefCartesianIndex) = IR.A === nothing ? A[IR.I] : IR.A[IR.I]
-Base.getindex(I::RefCartesianIndex, i::Int) = I.I[i]
+Base.getindex(I::RefCartesianIndex, i::Int) = RefIndex(I.A, I.I[i])
 
+const SCartesianIndex = Union{CartesianIndex, SymbolicUtils.BasicSymbolic{<:CartesianIndex}}
 
-function Base.getindex(A::AbstractArray, Is::Vector{<:RefCartesianIndex})
-    map(Is) do I
-        A[I]
-    end
-end
+Base.:+(I::RefCartesianIndex, J::SCartesianIndex) = RefCartesianIndex(I.I + J, I.A)
+Base.:-(I::RefCartesianIndex, J::SCartesianIndex) = RefCartesianIndex(I.I - J, I.A)
+Base.:+(I::SCartesianIndex, J::RefCartesianIndex) = RefCartesianIndex(I + J.I, J.A)
+Base.:-(I::SCartesianIndex, J::RefCartesianIndex) = RefCartesianIndex(I - J.I, J.A)
 
-Base.:+(I::RefCartesianIndex, J::CartesianIndex) = RefCartesianIndex(I.I + J, I.A)
-Base.:-(I::RefCartesianIndex, J::CartesianIndex) = RefCartesianIndex(I.I - J, I.A)
-Base.:+(I::CartesianIndex, J::RefCartesianIndex) = RefCartesianIndex(I + J.I, J.A)
-Base.:-(I::CartesianIndex, J::RefCartesianIndex) = RefCartesianIndex(I - J.I, J.A)
 
 (b::InterfaceBoundary)(I, s, j, isx) = wrapinterface(I, s, b, j, isx)
 (b::AbstractBoundary)(I, s, j, isx) = I
@@ -31,14 +28,130 @@ struct OrderedIndexArray{T,N,A<:AbstractArray{T,N}} <: AbstractArray{T,N}
     end
 end
 
-Base.getindex(o::OrderedIndexArray, I::CartesianIndex) = o[I[o.index]]
-Base.getindex(o::OrderedIndexArray, is...) = o[CartesianIndex(is...)]
+struct IfCartesianIndex{T1,T2, N} <: Base.AbstractCartesianIndex{N}
+    condition::Union{Bool, SymbolicUtils.BasicSymbolic{Bool}}
+    I1::T1
+    I2::T2
+    IfCartesianIndex(condition::Union{Bool, SymbolicUtils.BasicSymbolic{Bool}}, I1::T1, I2::T2) where {T1,T2} = new{T1,T2,length(I1)}(condition, I1, I2)
+end
+
+Base.length(I::IfCartesianIndex{<:Any,<:Any,N}) where {N} = N
+
+Base.:+(I::IfCartesianIndex, J::SCartesianIndex) = IfCartesianIndex(I.condition, I.I1 + J, I.I2 + J)
+Base.:-(I::IfCartesianIndex, J::SCartesianIndex) = IfCartesianIndex(I.condition, I.I1 - J, I.I2 - J)
+Base.:+(I::SCartesianIndex, J::IfCartesianIndex) = IfCartesianIndex(I.condition, I + J.I1, I + J.I2)
+Base.:-(I::SCartesianIndex, J::IfCartesianIndex) = IfCartesianIndex(I.condition, I - J.I1, I - J.I2)
+
+Base.getindex(I::IfCartesianIndex, j::Int) = ifelse(I.condition,  I.I1[j], I.I2[j])
+
+Base.getindex(o::OrderedIndexArray, I::SCartesianIndex) = o[I[o.index]]
+Base.getindex(o::OrderedIndexArray{T,N}, is::Vararg{Int}) where {T,N} = o[CartesianIndex(is...)]
+Base.getindex(o::OrderedIndexArray, I::Vararg{<:SymbolicUtils.BasicSymbolic}) = o[CartesianIndex(I...)]
+
+struct OffsetExtendingArray{T,N,A<:AbstractArray{T,N},B<:AbstractArray{T,N}} <: AbstractArray{T,N}
+    array1::A
+    array2::B
+    direction::Int
+    offset::Int
+    function OffsetExtendingArray(array1::A, array2::B, direction::Int, offset::Int) where {T, N, A<:AbstractArray{T,N}, B<:AbstractArray{T,N}}
+        f(a) = Tuple(a[filter(i -> i != direction, 1:N)]...)
+        s1 = f(size(array1))
+        s2 = f(size(array2))
+        @assert s1 == s2 "Internal Error: Arrays must be the same size in all directions except the direction of the connection, got $(s1) and $(s2)"
+        new{T,N,A,B}(array1, array2, direction, offset)
+    end
+end
+
+function Base.hash(o::OffsetExtendingArray{T,N}, h::UInt) where {T,N}
+    h = hash(o.array1, h)
+    h = hash(o.array2, h)
+    h = hash(o.direction, h)
+    h = hash(o.offset, h)
+    return h
+end
+
+function Base.getindex(o::OffsetExtendingArray{T,N}, I::Vararg{<:Integer}) where {T,N}
+    I = [o.direction == i ? I[i] + o.offset : I[i] for i in 1:N]
+    return ifelse(I[o.direction] > size(o.array1, o.direction),
+        o.array1[I],
+    #else
+        o.array2[I])
+    #end
+end
+
+
+
+function Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbolic{<:Integer}, is...) where {T,N}
+    I = vcat(i, is...)
+    I = I + o.offset * unitindex(N, o.direction)
+    ifelse(I[o.direction] > size(o.array1, o.direction),
+        o.array1[I],
+    #else
+        o.array2[I])
+    #end
+end
+
+function Base.getindex(o::OffsetExtendingArray{T,N}, I::Vararg{<:SymbolicUtils.BasicSymbolic{<:Integer}}) where {T,N}
+    I = CartesianIndex(I...)
+    return getindex(o, I)
+end
+
+
+function Base.size(o::OffsetExtendingArray{T,N}) where {T,N}
+    s1 = size(o.array1)
+    s2 = size(o.array2)
+    s = map(1:N) do i
+        if i == o.direction
+            s1[i] + s2[i]
+        else
+            s1[i]
+        end
+    end
+    return s
+end
+
+function Base.size(o::OffsetExtendingArray{T,N}, i::Int) where {T,N}
+    if i == o.direction
+        size(o.array1, i) + size(o.array2, i)
+    else
+        size(o.array1, i)
+    end
+end
+
+Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbolic{<:Integer}, is::Vararg{<:SymbolicUtils.BasicSymbolic{<:Integer}}) where {T,N} = SymbolicUtils.term(o, i, is...; type = T)
 
 function bwrap(I, bs, s, j, isx=false)
     for b in bs
         I = b(I, s, j, isx)
     end
     return I
+end
+
+function bwrap(udisc::AbstractArray, bs, s, j, isx=false)
+    for b in bs
+        udisc = expand(udisc, b, s, j, isx)
+    end
+    return udisc
+end
+
+function expand(udisc::AbstractArray, b::InterfaceBoundary, s, j, isx)
+    u = b.u
+    u2 = b.u2
+    u2disc = s.discvars[depvar(u2, s)]
+    # make an offset array connecting udisc and u2disc with udisc as the base
+    return _expand(udisc, u2disc, j, b)
+end
+
+function _expand(udisc, u2disc, j, b::InterfaceBoundary{Val{false}(),Val{true}()})
+    return OffsetExtendingArray(udisc, u2disc, j, 0)
+end
+
+function _expand(udisc, u2disc, j, b::InterfaceBoundary{Val{true}(),Val{false}()})
+    return OffsetExtendingArray(u2disc, udisc, j, size(u2disc, j))
+end
+
+function _expand(udisc, u2disc, j, b::InterfaceBoundary{B,B}) where {B}
+    throw(ArgumentError("Interface $(b.eq) joins two variables at the same end of the domain, this is not supported. Please post an issue if you need this feature."))
 end
 
 @inline function wrapinterface(I::RefCartesianIndex{N,Nothing}, s::DiscreteSpace, b::InterfaceBoundary, j, isx) where {N}
@@ -65,7 +178,7 @@ function get_interface_vars(b, s, j)
 end
 
 
-function __wrapinterface(I, s, isupper, l1, j, isx)
+function __wrapinterface(I, s, b::InterfaceBoundary, isupper, l1, j, isx)
     u = b.u
     u2 = b.u2
     N = ndims(u, s)
@@ -86,16 +199,18 @@ function __wrapinterface(I, s, isupper, l1, j, isx)
 end
 
 function _wrapinterface(I, s, b::InterfaceBoundary{Val{false}(),Val{true}()}, j, isx)
-    IfElse.ifelse(I[j] <= 1, __wrapinterface(I, s, false, 0, j, isx), RefCartesianIndex(I))
+    IfCartesianIndex(I[j] <= 1, __wrapinterface(I, s, b, false, 0, j, isx), RefCartesianIndex(I))
 end
 
 function _wrapinterface(I, s, b::InterfaceBoundary{Val{true}(),Val{false}()}, j, isx)
     l1 = length(s, b.x)
-    return Ifelse.ifelse(I[j] > l1,
-                         __wrapinterface(I, s, true, l1, j, isx),
+    return IfCartesianIndex(I[j] > l1,
+                         __wrapinterface(I, s, b, true, l1, j, isx),
                          RefCartesianIndex(I))
 end
+Base.getindex(I::SymbolicUtils.BasicSymbolic{<:SCartesianIndex}, j::Int) = arguments(I)[j]
+Base.length(I::SymbolicUtils.BasicSymbolic{<:SCartesianIndex})  = 
 
-function _wrapinterface(I, s, b::InterfaceBoundary{B,B}, j) where {B}
+function _wrapinterface(I, s, b::InterfaceBoundary{B,B}, j, isx) where {B}
     throw(ArgumentError("Interface $(b.eq) joins two variables at the same end of the domain, this is not supported. Please post an issue if you need this feature."))
 end

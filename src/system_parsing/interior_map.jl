@@ -1,4 +1,4 @@
-struct InteriorMap
+struct InteriorMap <: PDEBase.AbstractVarEqMapping
     var
     pde
     I
@@ -15,10 +15,10 @@ end
 # then we assign v to it because u is already assigned somewhere else.
 # and use the interior based on the assignment
 
-function InteriorMap(pdes, boundarymap, s::DiscreteSpace{N,M}, discretization::MOLFiniteDifference{G, S}) where {N, M, G, S}
+function PDEBase.construct_var_equation_mapping(pdes, boundarymap, s::DiscreteSpace{N,M}, discretization::MOLFiniteDifference{G, S}) where {N, M, G, S}
     @assert length(pdes) == M "There must be the same number of equations and unknowns, got $(length(pdes)) equations and $(M) unknowns"
     m = buildmatrix(pdes, s)
-    varmap = Dict(build_variable_mapping(m, s.ū, pdes))
+    varmap = Dict(build_variable_mapping(m, s.dvs, pdes))
 
     # Determine the interiors for each pde
     vlower = []
@@ -27,7 +27,7 @@ function InteriorMap(pdes, boundarymap, s::DiscreteSpace{N,M}, discretization::M
 
     interior = map(pdes) do pde
         u = varmap[pde]
-        boundaries = mapreduce(x -> boundarymap[operation(u)][x], vcat, s.x̄)
+        boundaries = mapreduce(x -> boundarymap[operation(u)][x], vcat, s.ivs)
         n = ndims(u, s)
         lower = zeros(Int, n)
         upper = zeros(Int, n)
@@ -39,20 +39,12 @@ function InteriorMap(pdes, boundarymap, s::DiscreteSpace{N,M}, discretization::M
         push!(vlower, pde => lower)
         push!(vupper, pde => upper)
         #TODO: Allow assymmetry
-        pdeorders = Dict(map(x -> x => d_orders(x, [pde]), s.x̄))
+        pdeorders = Dict(map(x -> x => d_orders(x, [pde]), s.ivs))
 
         # Add ghost points to pad stencil extents
 
         stencil_extents = (lower_extents, upper_extents) = calculate_stencil_extents(s, u, discretization, pdeorders, boundarymap)
 
-        # pad boundaries with interpolators
-        if S <: ArrayDiscretization
-            for (j, x) in enumerate(params(u, s))
-                lowerinterp = [LowerInterpolatingBoundary(u, x) for i in 1:(lower_extents[j] - lower[j])]
-                upperinterp = [UpperInterpolatingBoundary(u, x) for i in 1:(upper_extents[j] - upper[j])]
-                push!(boundarymap[operation(u)][x], vcat(lowerinterp, upperinterp)...)
-            end
-        end
         push!(extents, pde => stencil_extents)
         lower = [max(e, l) for (e, l) in zip(lower_extents, lower)]
         upper = [max(e, u) for (e, u) in zip(upper_extents, upper)]
@@ -71,6 +63,18 @@ function generate_interior(lower, upper, u, s, ::MOLFiniteDifference{G, D}) wher
     ret = s.Igrid[u][[(1+lower[x2i(s, u, x)]:length(s.grid[x])-upper[x2i(s, u, x)]) for x in args]...]
     return ret
 end
+
+@inline function clip_interior!!(lower, upper, s::DiscreteSpace, b::AbstractBoundary)
+    # This x2i is correct
+    dim = x2i(s, depvar(b.u, s), b.x)
+    @assert dim !== nothing "Internal Error: Variable $(b.x) not found in $(depvar(b.u, s)), when parsing boundary condition $(b)"
+    if b isa InterfaceBoundary && isupper(b)
+        return
+    end
+    lower[dim] = lower[dim] + !isupper(b)
+    upper[dim] = upper[dim] + isupper(b)
+end
+
 
 function generate_interior(lower, upper, u, s, ::MOLFiniteDifference{G, D}) where {G, D<:ArrayDiscretization}
     args = remove(arguments(u), s.time)
@@ -103,8 +107,8 @@ end
 function buildmatrix(pdes, s::DiscreteSpace{N,M}) where {N,M}
     m = zeros(Int, M, M)
     elegiblevars = [getvars(pde, s) for pde in pdes]
-    u2i = Dict([u => k for (k, u) in enumerate(s.ū)])
-    #@show elegiblevars, s.ū
+    u2i = Dict([u => k for (k, u) in enumerate(s.dvs)])
+    #@show elegiblevars, s.dvs
     for (i, varmap) in enumerate(elegiblevars)
         for var in keys(varmap)
             m[i, u2i[var]] = varmap[var]
@@ -185,7 +189,7 @@ function get_ranking!(varmap, term, x, s)
     S = Symbolics
     SU = SymbolicUtils
     #@show term
-    if findfirst(isequal(term), s.ū) !== nothing
+    if findfirst(isequal(term), s.dvs) !== nothing
         if varmap[term] < 1
             varmap[term] = 1
         end
@@ -206,23 +210,25 @@ function get_ranking!(varmap, term, x, s)
     end
 end
 
-function getvars(pde, s)
+function PDEBase.getvars(pde, s)
     ct = 0
     ut = []
     # Create ranking for each variable
-    varmap = Dict([u => 0 for u in s.ū])
+    varmap = Dict([u => 0 for u in s.dvs])
     if s.time !== nothing
         l = get_ranking!(varmap, pde.lhs, s.time, s)
         r = get_ranking!(varmap, pde.rhs, s.time, s)
-        for u in s.ū
+        for u in s.dvs
             if varmap[u] > 1
                 varmap[u] += div(typemax(Int), 2) #Massively weight derivatives in time
             end
         end
     end
-    for x in s.x̄
+    for x in s.ivs
         l = get_ranking!(varmap, pde.lhs, x, s)
         r = get_ranking!(varmap, pde.rhs, x, s)
     end
     return varmap
 end
+
+PDEBase.get_eqvar(interior_map::InteriorMap, pde) = interior_map.var[pde]

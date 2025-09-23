@@ -26,6 +26,8 @@ import Base.checkbounds
 import Base.getproperty
 import Base.ndims
 
+Symbolics.show_arrayop[] = true
+
 # Interface
 include("interface/grid_types.jl")
 include("interface/scheme_types.jl")
@@ -38,11 +40,9 @@ include("MOL_symbolic_utils.jl")
 include("MOL_utils.jl")
 include("discretization/array_form/stencil_utils.jl")
 include("broadcast_substitute.jl")
+include("fold_array_maker.jl")
 
 # System Parsing
-include("system_parsing/variable_map.jl")
-include("system_parsing/bcs/parse_boundaries.jl")
-include("system_parsing/bcs/periodic_map.jl")
 include("system_parsing/pde_system_transformation.jl")
 
 # Var Discretization and interior map
@@ -102,7 +102,7 @@ include("interface/solution/timeindep.jl")
 include("error_analysis.jl")
 include("MOL_discretization.jl")
 
-export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace
+export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace, fold_ranges
 
 export UpwindScheme, WENOScheme
 

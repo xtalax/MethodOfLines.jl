@@ -5,7 +5,7 @@ function SciMLBase.PDETimeSeriesSolution(sol::SciMLBase.AbstractODESolution{T}, 
         pdesys = metadata.pdesys
         discretespace = metadata.discretespace
 
-        ivs = [discretespace.time, discretespace.x̄...]
+        ivs = [discretespace.time, discretespace.ivs...]
         ivgrid = ((isequal(discretespace.time, x) ? sol.t : discretespace.grid[x] for x in ivs)...,)
 
         solved_unknowns = if metadata.use_ODAE
@@ -15,7 +15,7 @@ function SciMLBase.PDETimeSeriesSolution(sol::SciMLBase.AbstractODESolution{T}, 
             unknowns(odesys)
         end
         # Reshape the solution to flat arrays, faster to do this eagerly.
-        umap = Dict(map(discretespace.ū) do u
+        umap = Dict(map(discretespace.dvs) do u
             let discu = discretespace.discvars[u]
                 solu = map(CartesianIndices(discu)) do I
                     i = sym_to_index(discu[I], solved_unknowns)
@@ -47,7 +47,7 @@ function SciMLBase.PDETimeSeriesSolution(sol::SciMLBase.AbstractODESolution{T}, 
         # Build Interpolations
         interp = build_interpolation(umap, ivs, ivgrid, sol, pdesys)
 
-        return SciMLBase.PDETimeSeriesSolution{T,length(discretespace.ū),typeof(umap),typeof(metadata),
+        return SciMLBase.PDETimeSeriesSolution{T,length(discretespace.dvs),typeof(umap),typeof(metadata),
             typeof(sol),typeof(sol.errors),typeof(sol.t),typeof(ivgrid),
             typeof(ivs),typeof(pdesys.dvs),typeof(sol.prob),typeof(sol.alg),
             typeof(interp)}(umap, sol, sol.errors, sol.t, ivgrid, ivs,

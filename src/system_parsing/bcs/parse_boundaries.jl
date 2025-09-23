@@ -32,8 +32,8 @@ struct LowerBoundary <: AbstractLowerBoundary
         depvars_rhs = get_depvars(eq.rhs, v.depvar_ops)
         depvars = collect(depvars_lhs ∪ depvars_rhs)
         #depvars =  filter(u -> !any(map(x-> x isa Number, arguments(u))), depvars)
-        allx̄ = Set(filter(!isempty, map(u -> filter(x -> t === nothing || !isequal(x, t), arguments(u)), depvars)))
-        return new(u, x, depvar.(depvars, [v]), first(allx̄), eq, order)
+        allivs = Set(filter(!isempty, map(u -> filter(x -> t === nothing || !isequal(x, t), arguments(u)), depvars)))
+        return new(u, x, depvar.(depvars, [v]), first(allivs), eq, order)
     end
 end
 
@@ -48,8 +48,8 @@ struct UpperBoundary <: AbstractUpperBoundary
         depvars_lhs = get_depvars(eq.lhs, v.depvar_ops)
         depvars_rhs = get_depvars(eq.rhs, v.depvar_ops)
         depvars = collect(depvars_lhs ∪ depvars_rhs)
-        allx̄ = Set(filter(!isempty, map(u -> filter(x -> t === nothing || !isequal(x, t), arguments(u)), depvars)))
-        return new(u, x, depvar.(depvars, [v]), first(allx̄), eq, order)
+        allivs = Set(filter(!isempty, map(u -> filter(x -> t === nothing || !isequal(x, t), arguments(u)), depvars)))
+        return new(u, x, depvar.(depvars, [v]), first(allivs), eq, order)
     end
 end
 
@@ -92,8 +92,8 @@ struct HigherOrderInterfaceBoundary <: AbstractInterfaceBoundary
         depvars_rhs = get_depvars(eq.rhs, v.depvar_ops)
         depvars = collect(depvars_lhs ∪ depvars_rhs)
 
-        allx̄ = Set(filter(!isempty, map(u -> filter(x -> t === nothing || !isequal(x, t), arguments(u)), depvars)))
-        return new(u, u2, x, x2, depvar.(depvars, [v]), first(allx̄), eq, order)
+        allivs = Set(filter(!isempty, map(u -> filter(x -> t === nothing || !isequal(x, t), arguments(u)), depvars)))
+        return new(u, u2, x, x2, depvar.(depvars, [v]), first(allivs), eq, order)
     end
 end
 const AbstractEquationBoundary = Union{LowerBoundary, UpperBoundary, HigherOrderInterfaceBoundary}
@@ -217,9 +217,9 @@ function generate_boundary_matching_rules(v, orders)
     upperboundary(x) = v.intervals[x][2]
 
     # Rules to match boundary conditions on the lower boundaries
-    lower = Dict([operation(u) => Dict([x => _boundary_rules(v, orders, u, x, lowerboundary(x)) for x in all_params(u, v)]) for u in v.ū])
+    lower = Dict([operation(u) => Dict([x => _boundary_rules(v, orders, u, x, lowerboundary(x)) for x in all_ivs(u, v)]) for u in v.dvs])
 
-    upper = Dict([operation(u) => Dict([x => _boundary_rules(v, orders, u, x, upperboundary(x)) for x in all_params(u, v)]) for u in v.ū])
+    upper = Dict([operation(u) => Dict([x => _boundary_rules(v, orders, u, x, upperboundary(x)) for x in all_ivs(u, v)]) for u in v.dvs])
 
     return (lower, upper)
 end
@@ -234,7 +234,7 @@ function parse_bcs(bcs, v::VariableMap, orders)
 
     lower_boundary_rules, upper_boundary_rules = generate_boundary_matching_rules(v, orders)
 
-    boundarymap = Dict([operation(u) => Dict([x => [] for x in all_ivs(v)]) for u in v.ū])
+    boundarymap = Dict([operation(u) => Dict([x => [] for x in all_ivs(v)]) for u in v.dvs])
 
     # Generate initial conditions and bc equations
     for bc in bcs

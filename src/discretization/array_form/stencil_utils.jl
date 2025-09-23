@@ -122,15 +122,16 @@ function InteriorDerivArrayOp(weights, taps, udisc, s, j, output_idx, interior, 
         CartesianIndex(_is...)
     end
     # Wrap interfaces
-    Is = map(I -> bwrap(I, bs, s, j, isx), Is)
 
     Is = map(Is) do I
         map(1:ndims(udisc)) do i
             I[i]
         end
     end
+    Is = map(I -> CartesianIndex(I...), Is)
+    expr = sym_dot(weights, map(I -> udisc[I], Is))
 
-    expr = sym_dot(weights, map(I -> udisc[I...], Is))
+
 
     return FillArrayOp(expr, output_idx, interior)
 end
@@ -152,7 +153,7 @@ ArrayMakerWrap(udisc, ranges) = Arraymaker{Real}(Tuple(map(r -> r[end] - r[1] + 
 #####
 
 function get_interior(u, s, interior)
-    map(params(u, s)) do x
+    map(ivs(u, s)) do x
         if haskey(interior, x)
             interior[x]
         else
@@ -162,6 +163,6 @@ function get_interior(u, s, interior)
 end
 
 function get_ranges(u, s)
-    map(x -> first(axes(s.grid[x])), params(u, s))
+    map(x -> first(axes(s.grid[x])), ivs(u, s))
 end
-get_is(u, s) = map(x -> s.index_syms[x], params(u, s))
+get_is(u, s) = map(x -> s.index_syms[x], ivs(u, s))

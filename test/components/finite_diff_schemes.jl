@@ -39,14 +39,14 @@ domains = [t ∈ Interval(t_min, t_max), x ∈ Interval(x_min, x_max)]
             # Read the independent variables,
             # ignore if the only argument is [t]
             indvars = first(Set(filter(xs->!isequal(xs, [t]), map(arguments, depvars))))
-            x̄ = first(Set(filter(!isempty, map(u->filter(x-> t === nothing || !isequal(x, t.val), arguments(u)), depvars))))
+            ivs = first(Set(filter(!isempty, map(u->filter(x-> t === nothing || !isequal(x, t.val), arguments(u)), depvars))))
 
-            s = MethodOfLines.DiscreteSpace(domains, depvars, x̄, disc)
+            s = MethodOfLines.DiscreteSpace(domains, depvars, ivs, disc)
 
             derivweights = MethodOfLines.DifferentialDiscretizer(pdesys, s, disc)
             
             #@show pde.rhs, operation(pde.rhs), arguments(pde.rhs)
-            for II in s.Igrid[s.ū[1]][2:end-1]
+            for II in s.Igrid[s.dvs[1]][2:end-1]
                 #II = s.Igrid[end-1]
                 I1 = MethodOfLines.unitindices(1)[1]
 
@@ -83,18 +83,18 @@ end
     # Read the independent variables,
     # ignore if the only argument is [t]
     indvars = first(Set(filter(xs->!isequal(xs, [t]), map(arguments, depvars))))
-    x̄ = first(Set(filter(!isempty, map(u->filter(x-> t === nothing || !isequal(x, t.val), arguments(u)), depvars))))
+    ivs = first(Set(filter(!isempty, map(u->filter(x-> t === nothing || !isequal(x, t.val), arguments(u)), depvars))))
     
     for order in [2]
         disc = MOLFiniteDifference([x=>dx], t; approx_order=order)
-        s = MethodOfLines.DiscreteSpace(domains, depvars, x̄, disc)
+        s = MethodOfLines.DiscreteSpace(domains, depvars, ivs, disc)
 
         derivweights = MethodOfLines.DifferentialDiscretizer(pdesys, s, disc)
         
         ufunc(u, I, x) = s.discvars[u][I]
-        #TODO Test Interpolation of params
+        #TODO Test Interpolation of ivs
         # Test simple case
-        for II in s.Igrid[s.ū[1]][2:end-1]
+        for II in s.Igrid[s.dvs[1]][2:end-1]
             expr = MethodOfLines.cartesian_nonlinear_laplacian((1~1).lhs, II, derivweights, s, depvars, x, u(t,x))
             expr2 = MethodOfLines.central_difference(derivweights.map[Differential(x)^2], II, s, (1,x), u(t,x), ufunc)
             @test isequal(expr, expr2)
@@ -121,14 +121,14 @@ end
     # Read the independent variables,
     # ignore if the only argument is [t]
     indvars = first(Set(filter(xs->!isequal(xs, [t]), map(arguments, depvars))))
-    x̄ = first(Set(filter(!isempty, map(u->filter(x-> t === nothing || !isequal(x, t.val), arguments(u)), depvars))))
+    ivs = first(Set(filter(!isempty, map(u->filter(x-> t === nothing || !isequal(x, t.val), arguments(u)), depvars))))
 
-    s = MethodOfLines.DiscreteSpace(domains, depvars, x̄, disc)
+    s = MethodOfLines.DiscreteSpace(domains, depvars, ivs, disc)
 
     derivweights = MethodOfLines.DifferentialDiscretizer(pdesys, s, disc)
     
-    for II in s.Igrid[s.ū[1]][2:end-1]
-        #TODO Test Interpolation of params
+    for II in s.Igrid[s.dvs[1]][2:end-1]
+        #TODO Test Interpolation of ivs
         expr = MethodOfLines.spherical_diffusion((1~1).lhs, II, derivweights, s, depvars, x, u(t,x))
         #@show II, expr
     end

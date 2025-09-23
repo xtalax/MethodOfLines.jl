@@ -36,7 +36,7 @@ function boundary_value_rules(interior, s::DiscreteSpace{N,M,G}, boundary, deriv
     # replace u(t,0) with u₁, etc
 
     u = depvar(u_, s)
-    args = params(u, s)
+    args = ivs(u, s)
     j = findfirst(isequal(x_), args)
 
     boundary_vs = filter(v -> any(x -> safe_unwrap(x) isa Number, arguments(v)), boundary.depvars)
@@ -75,7 +75,7 @@ function boundary_value_rules(interior, s::DiscreteSpace{N,M,G}, boundary, deriv
     # replace u(t,0) with u₁, etc
 
     u = depvar(u_, s)
-    args = params(u, s)
+    args = ivs(u, s)
 
     boundary_vs = filter(v -> any(x -> safe_unwrap(x) isa Number, arguments(v)), boundary.depvars)
     non_boundary_vs = filter(v -> any(x -> !(safe_unwrap(x) isa Number), arguments(v)), boundary.depvars)
@@ -108,7 +108,7 @@ function boundary_value_rules(interior, s::DiscreteSpace{N,M,G}, boundary, deriv
     return vcat(depvarderivbcmaps, depvarbcmaps, integralbcmaps, varrules)
 end
 
-function generate_bc_op_pair(s, b::AbstractEquationBoundary, interior, iboundary, derivweights)
+function generate_bc_op_pair(s, b::AbstractTruncatingBoundary, interior, iboundary, derivweights)
     bc = b.eq
 
     u_, x_ = getvars(b)
@@ -117,7 +117,7 @@ function generate_bc_op_pair(s, b::AbstractEquationBoundary, interior, iboundary
     valrules = axiesvals(s, b, interior)
     rules = vcat(boundaryvalrules, valrules)
 
-    ranges = map(params(u_, s)) do x
+    ranges = map(ivs(u_, s)) do x
         if isequal(x, x_)
             offset(b, iboundary, length(s, x))
         else
@@ -152,7 +152,7 @@ function generate_bc_op_pair(s, boundary::InterfaceBoundary, interior, iboundary
         end
     end
     #I = CartesianIndex(idxs...)
-    ranges = map(PDEBase.ivs(s, depvar(u_, s))) do x
+    ranges = map(PDEBase.ivs(depvar(u_, s), s)) do x
         if isequal(x, x_)
             1
         else
@@ -161,48 +161,9 @@ function generate_bc_op_pair(s, boundary::InterfaceBoundary, interior, iboundary
     end
 
     expr = disc1[idxs...] - disc2[(idxs.+Ioffset.I)...]
-    symindices = setdiff(1:ndims(u, s), [j])
+    symindices = setdiff(1:ndims(u_, s), [j])
 
     Tuple(ranges) => FillArrayOp(expr, filter(x -> x isa Sym, idxs), ranges[symindices])
-end
-
-function generate_bc_op_pair(s, b::AbstractInterpolatingBoundary, interior, iboundary, derivweights)
-    u_, x_ = getvars(b)
-
-    j = x2i(s, depvar(u_, s), x_)
-    u = depvar(u_, s)
-
-    udisc = s.discvars[u]
-    D = derivweights.boundary[x_]
-    if isupper(b)
-        lenx = length(s, x_)
-        boffset = offset(b, iboundary, lenx)
-
-        ranges = map(params(u, s)) do x
-            if isequal(x, x_)
-                boffset
-            else
-                interior[x]
-            end
-        end
-
-        weights = D.high_boundary_coefs[iboundary]
-        taps = setdiff((lenx-D.boundary_stencil_length):lenx, [boffset])
-    else
-        ranges = map(params(u, s)) do x
-            if isequal(x, x_)
-                iboundary
-            else
-                interior[x]
-            end
-        end
-
-        weights = D.low_boundary_coefs[iboundary]
-        taps = setdiff(1:D.boundary_stencil_length, [iboundary])
-    end
-
-    Tuple(ranges) => BoundaryDerivArrayOp(weights, taps, udisc, j, get_is(u_, s),
-                                          get_interior(u, s, interior))
 end
 
 function generate_bc_op_pairs(s, boundaries, derivweights, interior)

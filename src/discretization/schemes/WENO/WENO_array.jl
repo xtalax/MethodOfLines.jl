@@ -84,6 +84,6 @@ This is a catch all ruleset, as such it does not use @rule.
     return reduce(safe_vcat,
                   [[(Differential(x))(u) => weno(interior, s, derivweights.advection_scheme,
                       pmap.map[operation(u)][x], (x2i(s, u, x), x), u, s.dxs[x])
-                    for x in params(u, s)]
+                    for x in ivs(u, s)]
                    for u in depvars], init = [])
 end

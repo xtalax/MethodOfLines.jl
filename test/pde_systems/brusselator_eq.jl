@@ -1,8 +1,8 @@
 using ModelingToolkit, MethodOfLines, LinearAlgebra, OrdinaryDiffEq
-using DomainSets
+using DomainSets, Test
 
 # using Plots
-
+global ReF = Ref([])
 # local sol
 begin #@testset "Test 01: Brusselator equation 2D" begin
        @parameters x y t
