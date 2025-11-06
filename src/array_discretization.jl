@@ -25,8 +25,8 @@ function PDEBase.discretize_equation!(
             println("Schemes Applied: The following rules were applied for the PDE $pde with the var $eqvar:")
         end
         try
-            #fold(broadcast_substitute(pde.lhs, rules, verbose), verbose)
-            broadcast_substitute(pde.lhs, rules, verbose)
+            fold(broadcast_substitute(pde.lhs, rules, verbose), verbose)
+            #broadcast_substitute(pde.lhs, rules, verbose)
         catch e
             println("A scheme has been incorrectly applied to the following equation: $pde.\n")
             #println("The following rules were constructed:")
@@ -36,13 +36,19 @@ function PDEBase.discretize_equation!(
     end
     interior = get_interior(eqvar, s, interior)
     ranges = get_ranges(eqvar, s)
-    bg = s.discvars[eqvar]
-    #TODO: Allow T
+    bg = 0
     eqarray = ArrayMaker{Real}(Tuple(last.(ranges)), vcat(Tuple(ranges) => bg,
                                               Tuple(interior) => pdeinterior,
                                               boundary_op_pairs))
-    safe_show(eqarray)
-
+    if verbose
+        println("arraymaker before fold:")
+        @show eqarray
+    end
+    eqarray = fold(eqarray, verbose)
+    if verbose
+        println("arraymaker after fold:")
+        @show eqarray
+    end
     push!(disc_state.eqs, eqarray)
 end
 

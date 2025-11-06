@@ -1,7 +1,7 @@
 struct RefCartesianIndex{IType,AType,N} <: Base.AbstractCartesianIndex{N}
     I::IType
     A::AType
-    RefCartesianIndex(I::IType, A=nothing) where {IType,AType} = new{IType,typeof(A),length(I)}(I, A)
+    RefCartesianIndex(I::IType, A=nothing) where {IType} = new{IType,typeof(A),length(I)}(I, A)
 end
 Base.length(IR::SymbolicUtils.BasicSymbolic{CartesianIndex}) = length(arguments(IR))
 Base.length(IR::RefCartesianIndex) = length(IR.I)
@@ -62,6 +62,33 @@ struct OffsetExtendingArray{T,N,A<:AbstractArray{T,N},B<:AbstractArray{T,N}} <: 
     end
 end
 
+function Base.display(o::OffsetExtendingArray)
+    print("OffsetExtendingArray{")
+    print("array1{")
+    display(o.array1)
+    print("}, array2{")
+    display(o.array2)
+    print("}, direction{")
+    print(o.direction)
+    print("}, offset{")
+    print(o.offset)
+    print("}}\n\n")
+end
+
+function Base.show(io::IO, o::OffsetExtendingArray)
+    print(io, "OffsetExtendingArray:")
+    print(io, "array1:")
+    display(o.array1)
+    print(io, "array2:")
+    display(o.array2)
+    print(io, "direction:")
+    print(io, o.direction)
+    print(io, "offset:")
+    print(io, o.offset)
+    print(io, "\n")
+    print(io, "\n")
+end
+
 function Base.hash(o::OffsetExtendingArray{T,N}, h::UInt) where {T,N}
     h = hash(o.array1, h)
     h = hash(o.array2, h)
@@ -107,7 +134,7 @@ function Base.size(o::OffsetExtendingArray{T,N}) where {T,N}
             s1[i]
         end
     end
-    return s
+    return Tuple(s)
 end
 
 function Base.size(o::OffsetExtendingArray{T,N}, i::Int) where {T,N}

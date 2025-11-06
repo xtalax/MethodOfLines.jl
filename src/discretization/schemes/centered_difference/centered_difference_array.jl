@@ -28,8 +28,11 @@ function central_difference(D::DerivativeOperator, interior, s, bs, jx, u, udisc
     boundaryoppairs = safe_vcat(lowerops, upperops)
 
     interiorop = interior_deriv(D, bwrap(udisc, bs, s, j, false), s, half_range(D.stencil_length), j, is, interior, bs)
-
-    return NullBG_ArrayMaker(ranges, safe_vcat([Tuple(interior) => interiorop], boundaryoppairs))[interior...]
+    if length(boundaryoppairs) == 0
+        return interiorop
+    else
+        return NullBG_ArrayMaker(ranges, safe_vcat([Tuple(interior) => interiorop], boundaryoppairs))[interior...]
+    end
 end
 
 @inline function generate_cartesian_rules(interior, s::DiscreteSpace, depvars, derivweights::DifferentialDiscretizer, bcmap, indexmap, terms)

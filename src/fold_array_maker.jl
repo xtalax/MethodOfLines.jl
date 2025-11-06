@@ -1,3 +1,4 @@
+# This os a disgusting hack to get around the fact that ArrayMakers are not supported for codegen
 
 isarr(x) = symtype(x) isa AbstractArray
 
@@ -15,56 +16,81 @@ function fold(term, verbose = false)
     if !istree(term)
         return term
     end
-    if term isa ArrayMaker
-        args = arguments(term)
-        verbose && @info "args = $args"
-        tterm = nothing
-        ipairs = []
-        for (i, arg) in enumerate(args[4:end])
-            if arg isa ArrayMaker
-                _args = arguments(arg)
-                tterm = arg
-                push!(ipairs, i => (_args[3] .=> fold.(_args[4:end], (verbose,))))
+    args = arguments(term)
+ #   try
+        if term isa ArrayMaker
+            verbose && @info "args = $args"
+            tterm = nothing
+            ipairs = []
+            for (i, arg) in enumerate(args[4:end])
+                if arg isa ArrayMaker
+                    _args = arguments(arg)
+                    tterm = arg
+                    push!(ipairs, i => (_args[3] .=> fold.(_args[4:end], (verbose,))))
+                end
             end
-        end
-        verbose && @info "pairs = $ipairs"
-        #TODO Check that this is robust to small arraymakers being split in to larger ones
-        for (i, pair) in ipairs
-            # flatten Arraymakers
-            ranges = map(p -> p[1], pair)
-            ops = map(p -> p[2], pair)
-            # insert pairs keeping track of the offset
-            if !isnothing(term) && size(term) != size(tterm)
-                args[3] = vcat(args[3][1:i-1], map(r -> r .+ map(_r -> _r[1], args[3][i]), ranges), args[3][i+1:end])
+            verbose && @info "pairs = $ipairs"
+            #TODO Check that this is robust to small arraymakers being split in to larger ones
+            for (i, pair) in ipairs
+                # flatten Arraymakers
+                ranges = map(p -> p[1], pair)
+                ops = map(p -> p[2], pair)
+                # insert pairs keeping track of the offset
+                if !isnothing(term) && size(term) != size(tterm)
+                    args[3] = vcat(args[3][1:i-1], map(r -> r .+ map(_r -> _r[1], args[3][i]), ranges), args[3][i+1:end])
+                else
+                    args[3] = vcat(args[3][1:i-1], ranges, args[3][i+1:end])
+                end
+                args[4:end] = vcat(args[4:end][1:i-1], ops, args[4:end][i+1:end])
+            end
+
+            T = args[1]
+            pairs = args[3] .=> fold.(args[4:end], (verbose,))
+            out = Construct_ArrayMaker(args[2], pairs)
+            if any(hasarraymaker, args[4:end])
+                return fold(out, verbose)
             else
-                args[3] = vcat(args[3][1:i-1], ranges, args[3][i+1:end])
+                return out
             end
-            args[4:end] = vcat(args[4:end][1:i-1], ops, args[4:end][i+1:end])
         end
+        op = operation(term)
+        if term isa ArrayOp
+                return op(fold.(args, (verbose,))...)
 
-        T = args[1]
-        pairs = args[3] .=> fold.(args[4:end], verbose)
-        return Construct_ArrayMaker{T}(args[2], pairs)
-    end
-    op = operation(term)
-        return fold(broadcast_reduce(op, fold.(arguments(term), (verbose,))..., verbose))
+        elseif any(x -> !(op isa x), [typeof(getindex)])
+            if length(arguments(term)) > 1
+                return broadcast_reduce(op, fold.(arguments(term), (verbose,))..., verbose)
+
+            elseif length(arguments(term)) == 1
+                return op(fold.(arguments(term), (verbose,))[1])
+            end
+        else
+            return term
+        end
+  #=  catch e
+        println("Faliure with term:")
+        @show term
+        rethrow(e)
+    end =#
 end
+   
 
+const SNumber = Union{Number, SymbolicUtils.BasicSymbolic{<:Number}}
 
-function broadcast_reduce(f, a::Number, b::ArrayMaker)
+function broadcast_reduce(f, a::SNumber, b::ArrayMaker, verbose = false)
     args = arguments(b)
     T = args[1]
 
     pairs = args[3] .=> broadcast_reduce.((f,), (a,), fold.(args[4:end], (verbose,)), verbose)
-    return Construct_ArrayMaker{T}(args[2], pairs)
+    return Construct_ArrayMaker(args[2], pairs)
 end
 
-function broadcast_reduce(f, a::ArrayMaker, b::Number)
+function broadcast_reduce(f, a::ArrayMaker, b::SNumber, verbose = false)
     args = arguments(a)
     T = args[1]
 
     pairs = args[3] .=> broadcast_reduce.((f,), fold.(args[4:end], (verbose,)), (b,), verbose)
-    return Construct_ArrayMaker{T}(args[2], pairs)
+    return Construct_ArrayMaker(args[2], pairs)
 end
 
 function broadcast_reduce(f, a::ArrayMaker, b::ArrayMaker, verbose = false)
@@ -74,8 +100,8 @@ function broadcast_reduce(f, a::ArrayMaker, b::ArrayMaker, verbose = false)
     @assert args1[2] == args2[2] "Dimension mismatch: sizes of the following ArrayMakers are not equal: $a and $b"
     pairs1 = args1[3] .=> fold.(args1[4:end], (verbose,))
     pairs2 = args2[3] .=> fold.(args2[4:end], (verbose,))
-    pairs = broadcast_reduce(f, folpairs1, pairs2)
-    return Construct_ArrayMaker{T}(args1[2], pairs)
+    pairs = broadcast_reduce(f, pairs1, pairs2, verbose)
+    return Construct_ArrayMaker(args1[2], pairs)
 end
 
 function broadcast_reduce(f, a::Vector{<:Pair}, b::Vector{<:Pair}, verbose = false)
@@ -83,7 +109,7 @@ function broadcast_reduce(f, a::Vector{<:Pair}, b::Vector{<:Pair}, verbose = fal
     rangesb, opsb = b
     ranges = fold_ranges(rangesa, rangesb; verbose=verbose)
     pairs = map(ranges) do r
-        r.region => broadcast_reduce(f, opsa[r.A_idxs], opsb[r.B_idxs], verbose)
+        r.region => broadcast_reduce(f, fold.(opsa[r.A_idxs], (verbose,)), fold.(opsb[r.B_idxs], (verbose,)), verbose)
     end
     return pairs
 end
@@ -106,7 +132,7 @@ function broadcast_reduce(f, a::ArrayOp, b::ArrayOp, verbose = false)
     return FillArrayOp(expr, is, ranges)
 end
 
-function broadcast_reduce(f, a::Number, b::ArrayOp, verbose = false)
+function broadcast_reduce(f, a::SNumber, b::ArrayOp, verbose = false)
     args = arguments(b)
     is = args[1]
     expr = f(a, args[2])
@@ -132,7 +158,7 @@ function broadcast_reduce(f, a::ArrayMaker, b::ArrayOp, verbose = false)
     pairs = args[3] .=> broadcast_reduce(f, map(i -> (fold.(args[4:end][i], verbose), fold.(b[args[3][i]], verbose)), 1:length(args[3]))..., verbose)
 
     verbose && @info "pairs = $pairs"
-    return FillArrayOp(expr, is, ranges)
+    return Construct_ArrayMaker(args[2], pairs)
 end
 
 function broadcast_reduce(f, a::ArrayOp, b::ArrayMaker, verbose = false)
@@ -140,10 +166,10 @@ function broadcast_reduce(f, a::ArrayOp, b::ArrayMaker, verbose = false)
     pairs = args[3] .=> broadcast_reduce(f, map(i -> (fold.(a[args[3][i]], verbose), fold.(args[4:end][i], verbose)), 1:length(args[3]))..., verbose)
 
     verbose && @info "pairs = $pairs"
-    return FillArrayOp(expr, is, ranges)
+    return Construct_ArrayMaker(args[2], pairs)
 end
 
-broadcast_reduce(f, a::Number, b::Number, verbose = false) = f(a, b)
+broadcast_reduce(f, a::SNumber, b::SNumber, verbose = false) = f(a, b)
 
 function fold_ranges(A::Vector{<:Pair}, B::Vector{<:Pair};
                                     keep_pairs::Bool=true, sort_output::Bool=true, verbose = false)
@@ -284,6 +310,8 @@ end
 function hasarraymaker(term)
     if istree(term)
         return any(hasarraymaker, arguments(term))
+    elseif term isa ArrayMaker
+        return true
     else
         return false
     end

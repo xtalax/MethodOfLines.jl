@@ -8,11 +8,13 @@ function _sub(expr, pairs, verbose)
     elseif istree(expr)
         op = operation(expr)
         args = _sub.(arguments(expr), (pairs,), (verbose,))
-        if any(arg -> symtype(arg) <: AbstractArray, args)
+        if any(arg -> symtype(arg) <: AbstractArray, args) && any(!(op isa T) for T in [ArrayOp, ArrayMaker, typeof(getindex)])
             try
                 return broadcast(op, args...)
                 #return unwrap(op(map(wrap, args)...))
             catch e
+                @show axes(args[1])
+                @show axes(args[2])
                 throw(ArgumentError("Cannot broadcast operation $op over arguments $args"))
             end
         else
