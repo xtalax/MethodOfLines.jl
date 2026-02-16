@@ -53,7 +53,7 @@ function generate_coordinates(i::Int, stencil_x, dummy_x,
 end
 
 function _get_gridloc(s, ut, is...)
-    u = Sym{SymbolicUtils.FnType{Tuple, Real}}(nameof(operation(ut)))
+    u = Sym{SymbolicUtils.SymReal}(nameof(operation(ut)))
     u = operation(s.dvs[findfirst(isequal(u), operation.(s.dvs))])
     args = remove(s.args[u], s.time)
     gridloc = map(enumerate(args)) do (i, x)
@@ -104,7 +104,7 @@ function newindex(u_, II, s, indexmap)
     is = map(enumerate(args_)) do (j, x)
         if haskey(indexmap, x)
             II[indexmap[x]]
-        elseif safe_unwrap(x) isa Number
+        elseif (let xu = safe_unwrap(x); xu isa Number || SymbolicUtils.isconst(xu) end)
             if isequal(x, s.axies[args[j]][1])
                 1
             elseif isequal(x, s.axies[args[j]][end])

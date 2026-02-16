@@ -1,9 +1,10 @@
-function error_analysis(sys, e)
+function error_analysis(sys, e, verbose = MOLVerbosity())
     eqs = sys.eqs
     unknowns = sys.unknowns
     t = sys.iv
-    println("The system of equations is:")
-    println(eqs)
+    @SciMLMessage(verbose, :error_analysis) do
+        "The system of equations is:\n$eqs"
+    end
     if e isa ModelingToolkit.ExtraVariablesSystemException
 
         rs = [Differential(t)(state) => state for state in unknowns]
@@ -20,14 +21,15 @@ function error_analysis(sys, e)
                 end
             end
         end
-        println()
-        println("There are $(length(unknowns)) variables and $(length(eqs)) equations.\n")
-        println("There are $numderivs time derivatives.\n")
-        println("The variables without time derivatives are:")
-        println(extraunknowns)
-        println()
-        println("The equations without time derivatives are:")
-        println(extraeqs)
+        @SciMLMessage(verbose, :error_analysis) do
+            """
+            There are $(length(unknowns)) variables and $(length(eqs)) equations.
+            There are $numderivs time derivatives.
+            The variables without time derivatives are:
+            $extraunknowns
+            The equations without time derivatives are:
+            $extraeqs"""
+        end
         rethrow(e)
     else
         rethrow(e)

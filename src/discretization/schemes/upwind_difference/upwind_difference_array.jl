@@ -29,7 +29,7 @@ function _upwind_difference(D, ranges, interior, is, s,
     end
     boundaryoppairs = safe_vcat(lowerops, upperops)
 
-    NullBG_ArrayMaker(ranges, safe_vcat([Tuple(interior) => interiorop], boundaryoppairs))[interior...]
+    Construct_ArrayMaker(safe_vcat([Tuple(interior) => interiorop], boundaryoppairs))
 end
 
 """
@@ -54,15 +54,133 @@ end
 
 function upwind_difference(expr, d::Int, interior, s::DiscreteSpace, b,
                            depvars, derivweights, (j, x), u, udisc, indexmap)
-    # TODO: Allow derivatives in expr
+    is = get_is(u, s)
+    uinterior = get_interior(u, s, interior)
+    ndims(u, s) == 0 && return Num(0)
 
-    valrules = arrayvalmaps(s, u, depvars, interior)
-    exprarr = broadcast_substitute(expr, valrules)
-    ranges = get_ranges(u, s)
+    D_pos = derivweights.windmap[2][Differential(x)^d]
+    D_neg = derivweights.windmap[1][Differential(x)^d]
 
-    IfElse.ifelse.(exprarr .> 0,
-        exprarr .* upwind_difference(d, ranges, get_interior(u, s, interior), get_is(u, s), s, b, derivweights, (j, x), u, udisc, true),
-        exprarr .* upwind_difference(d, ranges, get_interior(u, s, interior), get_is(u, s), s, b, derivweights, (j, x), u, udisc, false))
+    lenx = length(s, x)
+    haslower, hasupper = haslowerupper(b, x)
+    grid_offsets = map(r -> first(r) - 1, uinterior)
+
+    # Build symbolic coefficient using index variables instead of concrete grid values.
+    # This keeps everything as a single symbolic expression inside an ArrayOp.
+    coeff_sym = _symbolic_coeff(expr, s, u, depvars, interior, is, grid_offsets)
+
+    # Build interior stencil expressions for both wind directions
+    pos_offsets = -D_pos.stencil_length+1:0
+    neg_offsets = 0:D_neg.stencil_length-1
+    pos_expr = _stencil_expr(D_pos, pos_offsets, udisc, is, j, grid_offsets)
+    neg_expr = _stencil_expr(D_neg, neg_offsets, udisc, is, j, grid_offsets)
+
+    # Safe interior where both stencils are valid
+    bpc_pos = D_pos.boundary_point_count
+    bpc_neg = D_neg.boundary_point_count
+    lo = haslower ? first(uinterior[j]) : max(first(uinterior[j]), max(bpc_pos, bpc_neg) + 1)
+    hi = hasupper ? last(uinterior[j]) : min(last(uinterior[j]), lenx - max(bpc_pos, bpc_neg))
+    safe_interior = collect(uinterior)
+    safe_interior[j] = lo:hi
+    safe_onebased = map(r -> 1:length(r), safe_interior)
+
+    combined = IfElse.ifelse(coeff_sym > 0, coeff_sym * pos_expr, coeff_sym * neg_expr)
+    interiorop = FillArrayOp(recursive_unwrap(combined), Tuple(is), safe_onebased)
+
+    # Build boundary ops for near-boundary points where one stencil is invalid.
+    # At these points, use the boundary stencil for the direction that goes out of bounds
+    # and the interior stencil for the direction that's still valid.
+    boundary_ops = Pair[]
+    if !haslower && first(uinterior[j]) < lo
+        for iboundary in first(uinterior[j]):(lo-1)
+            pos_bnd = _boundary_stencil_expr(D_pos.low_boundary_coefs[iboundary],
+                          1:D_pos.boundary_stencil_length, udisc, is, j)
+            bnd_combined = IfElse.ifelse(coeff_sym > 0, coeff_sym * pos_bnd, coeff_sym * neg_expr)
+            push!(boundary_ops, prepare_boundary_op(
+                (FillArrayOp(recursive_unwrap(bnd_combined), Tuple(is),
+                    map(1:length(is)) do k; k == j ? (1:1) : safe_onebased[k]; end),
+                 iboundary), uinterior, j))
+        end
+    end
+    if !hasupper && last(uinterior[j]) > hi
+        for iboundary in (hi+1):last(uinterior[j])
+            neg_bnd = _boundary_stencil_expr(D_neg.high_boundary_coefs[lenx - iboundary + 1],
+                          (lenx-D_neg.boundary_stencil_length+1):lenx, udisc, is, j)
+            bnd_combined = IfElse.ifelse(coeff_sym > 0, coeff_sym * pos_expr, coeff_sym * neg_bnd)
+            push!(boundary_ops, prepare_boundary_op(
+                (FillArrayOp(recursive_unwrap(bnd_combined), Tuple(is),
+                    map(1:length(is)) do k; k == j ? (1:1) : safe_onebased[k]; end),
+                 iboundary), uinterior, j))
+        end
+    end
+
+    if isempty(boundary_ops)
+        return interiorop
+    else
+        return Construct_ArrayMaker(safe_vcat([Tuple(safe_interior) => interiorop], boundary_ops))
+    end
+end
+
+# Build a symbolic expression for the coefficient `expr` using index variables.
+# Instead of substituting concrete grid values (which gives a Vector{Float64}),
+# we substitute symbolic grid lookups so the result stays as a single expression
+# that lives inside the ArrayOp.
+function _symbolic_coeff(expr, s, u, depvars, interior, is, grid_offsets)
+    sym_rules = Pair[]
+    # Spatial vars → symbolic grid lookup using index variables
+    for xv in ivs(u, s)
+        k = x2i(s, u, xv)
+        sym_val = SymbolicUtils.term(getindex, s.grid[xv], is[k] + grid_offsets[k]; type=Real)
+        push!(sym_rules, xv => sym_val)
+    end
+    # Dependent variables → symbolic array element reference
+    for v in depvars
+        if ndims(v, s) > 0
+            vdisc = s.discvars[v]
+            vis = get_is(v, s)
+            vinternal = get_interior(v, s, interior)
+            voffsets = map(r -> first(r) - 1, vinternal)
+            idx = ntuple(ndims(v, s)) do k
+                vis[k] + voffsets[k]
+            end
+            push!(sym_rules, v => vdisc[idx...])
+        end
+    end
+    broadcast_substitute(expr, sym_rules)
+end
+
+# Build the weighted stencil sum expression: Σ w_k * u[tap_k]
+# D is the DerivativeOperator (needed for boundary_point_count with non-uniform dx)
+function _stencil_expr(D, offsets, udisc, is, j, grid_offsets)
+    taps = offsets .+ (is[j] + grid_offsets[j])
+    Is = map(taps) do tap
+        ntuple(ndims(udisc)) do i
+            i == j ? tap : is[i] + grid_offsets[i]
+        end
+    end
+    vals = map(I -> udisc[I...], Is)
+    weights = D.stencil_coefs
+    if weights isa AbstractVector && eltype(weights) <: AbstractVector
+        # Non-uniform dx: weights is Vector{SVector{L,T}}, one set per interior position.
+        # Use symbolic indexing to look up the correct weights at each grid point.
+        stencil_idx = is[j] + grid_offsets[j] - D.boundary_point_count
+        stencil_len = length(first(weights))
+        weight_columns = [Float64[weights[p][k] for p in eachindex(weights)] for k in 1:stencil_len]
+        sym_weights = [SymbolicUtils.term(getindex, wc, stencil_idx; type=Real) for wc in weight_columns]
+        sym_dot(sym_weights, vals)
+    else
+        sym_dot(weights, vals)
+    end
+end
+
+# Build boundary stencil sum at a fixed boundary point (taps are concrete positions)
+function _boundary_stencil_expr(weights, taps, udisc, is, j)
+    Is = map(taps) do tap
+        ntuple(ndims(udisc)) do i
+            i == j ? tap : is[i]
+        end
+    end
+    sym_dot(weights, map(I -> udisc[I...], Is))
 end
 
 @inline function generate_winding_rules(interior, s::DiscreteSpace, depvars,

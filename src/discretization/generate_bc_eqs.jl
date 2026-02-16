@@ -30,7 +30,7 @@ function generate_boundary_val_funcs(s, depvars, boundarymap, indexmap, derivwei
             if b isa InterfaceBoundary
                 II -> []
             # Only make a map if it is actually possible to substitute in the boundary value given the indexmap
-            elseif all(x -> haskey(indexmap, x), filter(x -> !(safe_unwrap(x) isa Number), b.indvars))
+            elseif all(x -> haskey(indexmap, x), filter(x -> !(let xu = safe_unwrap(x); xu isa Number || SymbolicUtils.isconst(xu) end), b.indvars))
                 II -> boundary_value_maps(II, s, b, derivweights, indexmap)
             else
                 II -> []
@@ -63,7 +63,7 @@ function boundary_value_maps(II::CartesianIndex, s::DiscreteSpace{N,M,G}, bounda
     depvarbcmaps = [u_ => half_offset_centered_difference(derivweights.interpmap[x_], II - shift(boundary), s, [], (j, x_), u, ufunc)]
 
    # Only make a map if the integral will actually come out to the same number of dimensions as the boundary value
-    integralvs = filter(v -> !any(x -> safe_unwrap(x) isa Number, arguments(v)), boundary.depvars)
+    integralvs = filter(v -> !any(x -> (let xu = safe_unwrap(x); xu isa Number || SymbolicUtils.isconst(xu) end), arguments(v)), boundary.depvars)
     # @show integralvs
 
     integralbcmaps = generate_whole_domain_integration_rules(IIold, s, integralvs, indexmap, nothing, x_)
@@ -109,7 +109,7 @@ function boundary_value_maps(II::CartesianIndex, s::DiscreteSpace{N,M,G}, bounda
     depvarbcmaps = [u_ => s.discvars[u][II]]
 
     # Only make a map if the integral will actually come out to the same number of dimensions as the boundary value
-    integralvs = unwrap.(filter(v -> !any(x -> safe_unwrap(x) isa Number, arguments(v)), boundary.depvars))
+    integralvs = unwrap.(filter(v -> !any(x -> (let xu = safe_unwrap(x); xu isa Number || SymbolicUtils.isconst(xu) end), arguments(v)), boundary.depvars))
 
     integralbcmaps = generate_whole_domain_integration_rules(IIold, s, integralvs, indexmap, nothing, x_)
 

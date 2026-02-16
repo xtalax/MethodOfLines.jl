@@ -30,7 +30,7 @@ function spherical_diffusion(innerexpr, interior, derivweights, s, bs, depvars, 
             op = selectdim(r0deriv, j, k)
             prepare_boundary_op((op, k), interior, j)
         end
-        return NullBG_ArrayMaker(ranges, vcat(Tuple(interior) => out, r0pairs))[interior...]
+        return Construct_ArrayMaker(safe_vcat([Tuple(interior) => out], r0pairs))
     else
         return out
     end

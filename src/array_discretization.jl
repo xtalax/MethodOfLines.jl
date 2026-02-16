@@ -1,8 +1,55 @@
+function PDEBase.generate_metadata(s::DiscreteSpace, disc::MOLFiniteDifference{G, D},
+        pdesys, boundarymap, complexmap) where {G, D <: ArrayDiscretization}
+    use_ODAE = false
+    return MOLMetadata(s, disc, pdesys, use_ODAE)
+end
+
+# Override discretize for ArrayDiscretization to wrap result in MOLPDEProblem,
+# enabling automatic PDESolution wrapping after solve.
+function SciMLBase.discretize(pdesys::PDESystem,
+                              discretization::MOLFiniteDifference{G, ArrayDiscretization};
+                              analytic = nothing, kwargs...) where {G}
+    sys, tspan, u0 = SciMLBase.symbolic_discretize(pdesys, discretization)
+    u0_pairs = u0 === nothing ? Pair[] : u0
+    try
+        simpsys = mtkcompile(sys)
+        disc_meta = get_disc_metadata(sys)
+        if tspan === nothing
+            add_metadata!(disc_meta, sys)
+            prob = NonlinearProblem(simpsys, ones(length(get_eqs(simpsys)));
+                                   discretization.kwargs..., kwargs...)
+            return MOLPDEProblem(prob, disc_meta)
+        else
+            add_metadata!(get_disc_metadata(simpsys), sys)
+            prob = ODEProblem(simpsys, u0_pairs, tspan; build_initializeprob=false,
+                             discretization.kwargs..., kwargs...)
+            if analytic !== nothing
+                f = ODEFunction(pdesys, discretization; analytic = analytic,
+                               discretization.kwargs..., kwargs...)
+                prob = ODEProblem(f, prob.u0, prob.tspan, prob.p;
+                                 discretization.kwargs..., kwargs...)
+            end
+            return MOLPDEProblem(prob, disc_meta)
+        end
+    catch e
+        PDEBase.error_analysis(sys, e)
+    end
+end
+
+PDEBase.get_discvars(s::DiscreteSpace) = s.discvars
+
 function PDEBase.discretize_equation!(
     disc_state::PDEBase.EquationState, pde::Equation, interiormap,
     eqvar, bcmap, depvars, s::DiscreteSpace, derivweights, indexmap,
     discretization::MOLFiniteDifference{G, D}) where {G, D <: ArrayDiscretization}
-    verbose = discretization.verbose_schemes
+    verbose = discretization.verbose
+
+    # Pure ODE variable (no spatial dimensions) — pass through without ArrayMaker.
+    if ndims(eqvar, s) == 0
+        push!(disc_state.eqs, pde)
+        return
+    end
+
     # Handle boundary values appearing in the equation by creating functions that map each point on the interior to the correct replacement rule
 
     # Find boundaries for this equation
@@ -21,14 +68,16 @@ function PDEBase.discretize_equation!(
                                                       derivweights, bcmap, indexmap),
                      boundary_rules,
                      arrayvalmaps(s, eqvar, depvars, interior))
-        if verbose
-            println("Schemes Applied: The following rules were applied for the PDE $pde with the var $eqvar:")
+        @SciMLMessage(verbose, :discretization) do
+            "Schemes Applied: The following rules were applied for the PDE $pde with the var $eqvar:"
         end
         try
-            fold(broadcast_substitute(pde.lhs, rules, verbose), verbose)
+            broadcast_substitute(pde.lhs, rules, verbose)
             #broadcast_substitute(pde.lhs, rules, verbose)
         catch e
-            println("A scheme has been incorrectly applied to the following equation: $pde.\n")
+            @SciMLMessage(verbose, :discretization) do
+                "A scheme has been incorrectly applied to the following equation: $pde."
+            end
             #println("The following rules were constructed:")
             #display(rules)
             rethrow(e)
@@ -36,36 +85,33 @@ function PDEBase.discretize_equation!(
     end
     interior = get_interior(eqvar, s, interior)
     ranges = get_ranges(eqvar, s)
-    bg = 0
-    eqarray = ArrayMaker{Real}(Tuple(last.(ranges)), vcat(Tuple(ranges) => bg,
-                                              Tuple(interior) => pdeinterior,
-                                              boundary_op_pairs))
-    if verbose
-        println("arraymaker before fold:")
-        @show eqarray
-    end
-    eqarray = fold(eqarray, verbose)
-    if verbose
-        println("arraymaker after fold:")
-        @show eqarray
-    end
+    bg = fill(0, last.(ranges)...)
+    eqarray = deepcopy(bg) ~ ArrayMaker{SymReal}([ranges, interior, map(p -> p.first, boundary_op_pairs)...],
+                                                 [bg, pdeinterior, map(p -> p.second, boundary_op_pairs)...])
+
     push!(disc_state.eqs, eqarray)
 end
 
-function safe_show(term)
+function safe_show(term, verbose = MOLVerbosity(SciMLLogging.None()))
     if istree(term)
         args = arguments(term)
-        @show operation(term)
+        @SciMLMessage(verbose, :stencil) do
+            "operation: $(operation(term))"
+        end
         for (i, arg) in enumerate(args)
             try
-                @show i, arg
+                @SciMLMessage(verbose, :stencil) do
+                    "arg $i: $arg"
+                end
             catch e
-                println("Faliure with argument $i")
-                safe_show.(args)
+                @SciMLMessage("Failure with argument $i", verbose, :stencil)
+                safe_show.(args, (verbose,))
             end
         end
     else
-        @show term
+        @SciMLMessage(verbose, :stencil) do
+            "term: $term"
+        end
     end
 end
 

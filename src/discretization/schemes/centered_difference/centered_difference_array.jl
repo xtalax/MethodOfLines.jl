@@ -5,33 +5,44 @@
 function central_difference(D::DerivativeOperator, interior, s, bs, jx, u, udisc)
     args = ivs(u, s)
     interior = get_interior(u, s, interior)
-    ranges = get_ranges(u, s)
     is = get_is(u, s)
 
     j, x = jx
     lenx = length(s, x)
     haslower, hasupper = haslowerupper(bs, x)
 
+    # Generate boundary stencil ops for near-boundary interior points that fall
+    # within the DerivativeOperator boundary stencil zone.
+    # Skip when interface boundaries exist (haslower/hasupper) — bwrap handles those.
     lowerops = []
     upperops = []
 
-    if !haslower
-        lowerops = map(interior[j][1]:D.boundary_point_count) do iboundary
+    if !haslower && first(interior[j]) <= D.boundary_point_count
+        lowerops = map(first(interior[j]):D.boundary_point_count) do iboundary
             lower_boundary_deriv(D, udisc, iboundary, j, is, interior)
         end
     end
-    if !hasupper
-        upperops = map((lenx-D.boundary_point_count+1):interior[j][end]) do iboundary
+    if !hasupper && last(interior[j]) >= lenx - D.boundary_point_count + 1
+        upperops = map((lenx-D.boundary_point_count+1):last(interior[j])) do iboundary
             upper_boundary_deriv(D, udisc, iboundary, j, is, interior, lenx)
         end
     end
     boundaryoppairs = safe_vcat(lowerops, upperops)
 
-    interiorop = interior_deriv(D, bwrap(udisc, bs, s, j, false), s, half_range(D.stencil_length), j, is, interior, bs)
+    # Narrow interior for dimension j to the stencil-valid range where the
+    # centered stencil can safely access all required taps.
+    # For interface boundaries (haslower/hasupper), bwrap extends the array so
+    # the standard stencil can reach across — no restriction needed on that side.
+    stencil_interior = collect(interior)
+    lo = haslower ? first(interior[j]) : max(first(interior[j]), D.boundary_point_count + 1)
+    hi = hasupper ? last(interior[j]) : min(last(interior[j]), lenx - D.boundary_point_count)
+    stencil_interior[j] = lo:hi
+
+    interiorop = interior_deriv(D, bwrap(udisc, bs, s, j, false), s, half_range(D.stencil_length), j, is, stencil_interior, bs)
     if length(boundaryoppairs) == 0
         return interiorop
     else
-        return NullBG_ArrayMaker(ranges, safe_vcat([Tuple(interior) => interiorop], boundaryoppairs))[interior...]
+        return Construct_ArrayMaker(safe_vcat([Tuple(stencil_interior) => interiorop], boundaryoppairs))
     end
 end
 

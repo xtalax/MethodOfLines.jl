@@ -1,9 +1,11 @@
-broadcast_substitute(expr, pairs, verbose = false) = _sub(expr, pairs, verbose)
+broadcast_substitute(expr, pairs, verbose = MOLVerbosity(SciMLLogging.None())) = _sub(expr, pairs, verbose)
 
 function _sub(expr, pairs, verbose)
     ipair = findfirst(p -> isequal(p.first, expr), pairs)
     if ipair !== nothing
-        verbose && @warn "Replacing $expr with $(pairs[ipair])"
+        @SciMLMessage(verbose, :stencil) do
+            "Replacing $expr with $(pairs[ipair])"
+        end
         return pairs[ipair].second
     elseif istree(expr)
         op = operation(expr)
@@ -13,8 +15,6 @@ function _sub(expr, pairs, verbose)
                 return broadcast(op, args...)
                 #return unwrap(op(map(wrap, args)...))
             catch e
-                @show axes(args[1])
-                @show axes(args[2])
                 throw(ArgumentError("Cannot broadcast operation $op over arguments $args"))
             end
         else
@@ -25,7 +25,7 @@ function _sub(expr, pairs, verbose)
     end
 end
 
-function broadcast_substitute(pairs::Array{<:Pair}, verbose = false)
+function broadcast_substitute(pairs::Array{<:Pair}, verbose = MOLVerbosity(SciMLLogging.None()))
     map(pairs) do pair
         op = last(pair)
         @assert op isa ArrayOp

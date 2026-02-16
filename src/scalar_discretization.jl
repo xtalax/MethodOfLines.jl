@@ -18,28 +18,28 @@ function discretize_equation!(alleqs, bceqs, pde, interiormap, eqvar, bcmap, dep
     # Generate the discrete form ODEs for the interior
     eqs = if length(interior) == 0
         II = CartesianIndex()
-        discretize_equation_at_point(II, s, depvars, pde, derivweights, bcmap, eqvar, indexmap, boundaryvalfuncs)
+        discretize_equation_at_point(II, s, depvars, pde, derivweights, bcmap, eqvar, indexmap, boundaryvalfuncs, verbose)
     else
         vec(map(interior) do II
-            discretize_equation_at_point(II, s, depvars, pde, derivweights, bcmap, eqvar, indexmap, boundaryvalfuncs)
+            discretize_equation_at_point(II, s, depvars, pde, derivweights, bcmap, eqvar, indexmap, boundaryvalfuncs, verbose)
         end)
     end
     push!(alleqs, eqs)
 end
 
-function discretize_equation_at_point(II, s, depvars, pde, derivweights, bcmap, eqvar, indexmap, boundaryvalfuncs)
+function discretize_equation_at_point(II, s, depvars, pde, derivweights, bcmap, eqvar, indexmap, boundaryvalfuncs, verbose)
     boundaryrules = mapreduce(f -> f(II), vcat, boundaryvalfuncs, init = [])
     rules = vcat(generate_finite_difference_rules(II, s, depvars, pde, derivweights, bcmap, indexmap), boundaryrules, valmaps(s, eqvar, depvars, II, indexmap))
     try
         return substitute(pde.lhs, rules) ~ substitute(pde.rhs, rules)
     catch e
-        println("A scheme has been incorrectly applied to the following equation: $pde.\n")
-        println("The following rules were constructed at index $II:")
-        display(rules)
+        @SciMLMessage(verbose, :discretization) do
+            "A scheme has been incorrectly applied to the following equation: $pde.\nThe following rules were constructed at index $II:\n$rules"
+        end
         rethrow(e)
     end
 end
-function generate_system(alleqs, bceqs, ics, discvars, defaults, ps, tspan, metadata)
+function generate_system(alleqs, bceqs, ics, discvars, defaults, ps, tspan, metadata; verbose = MOLVerbosity())
     t = metadata.discretespace.time
     name = metadata.pdesys.name
     bceqs = reduce(vcat, bceqs)
@@ -62,11 +62,11 @@ function generate_system(alleqs, bceqs, ics, discvars, defaults, ps, tspan, meta
             return sys, tspan
         end
     catch e
-        println("The system of equations is:")
-        println(alleqs)
-        println()
-        println("Discretization failed, please post an issue on https://github.com/SciML/MethodOfLines.jl with the failing code and system at low point count.")
-        println()
+        @SciMLMessage(verbose, :error_analysis) do
+            "The system of equations is:\n$alleqs"
+        end
+        @SciMLMessage("Discretization failed, please post an issue on https://github.com/SciML/MethodOfLines.jl with the failing code and system at low point count.",
+            verbose, :error_analysis)
         rethrow(e)
     end
 end

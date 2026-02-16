@@ -12,14 +12,14 @@ isarr(x) = symtype(x) isa AbstractArray
 """
 Should fold any broadcasts to inner ArrayOps, and fold inner ArrayOps
 """
-function fold(term, verbose = false)
+function fold(term, verbose = MOLVerbosity(SciMLLogging.None()))
     if !istree(term)
         return term
     end
     args = arguments(term)
  #   try
         if term isa ArrayMaker
-            verbose && @info "args = $args"
+            @SciMLMessage(verbose, :fold) do; "args = $args"; end
             tterm = nothing
             ipairs = []
             for (i, arg) in enumerate(args[4:end])
@@ -29,7 +29,7 @@ function fold(term, verbose = false)
                     push!(ipairs, i => (_args[3] .=> fold.(_args[4:end], (verbose,))))
                 end
             end
-            verbose && @info "pairs = $ipairs"
+            @SciMLMessage(verbose, :fold) do; "pairs = $ipairs"; end
             #TODO Check that this is robust to small arraymakers being split in to larger ones
             for (i, pair) in ipairs
                 # flatten Arraymakers
@@ -46,7 +46,7 @@ function fold(term, verbose = false)
 
             T = args[1]
             pairs = args[3] .=> fold.(args[4:end], (verbose,))
-            out = Construct_ArrayMaker(args[2], pairs)
+            out = Construct_ArrayMaker(pairs)
             if any(hasarraymaker, args[4:end])
                 return fold(out, verbose)
             else
@@ -75,25 +75,25 @@ function fold(term, verbose = false)
 end
    
 
-const SNumber = Union{Number, SymbolicUtils.BasicSymbolic{<:Number}}
+const SNumber = Union{Number, SymbolicUtils.BasicSymbolic{SymbolicUtils.SymReal}}
 
-function broadcast_reduce(f, a::SNumber, b::ArrayMaker, verbose = false)
+function broadcast_reduce(f, a::SNumber, b::ArrayMaker, verbose = MOLVerbosity(SciMLLogging.None()))
     args = arguments(b)
     T = args[1]
 
     pairs = args[3] .=> broadcast_reduce.((f,), (a,), fold.(args[4:end], (verbose,)), verbose)
-    return Construct_ArrayMaker(args[2], pairs)
+    return Construct_ArrayMaker(pairs)
 end
 
-function broadcast_reduce(f, a::ArrayMaker, b::SNumber, verbose = false)
+function broadcast_reduce(f, a::ArrayMaker, b::SNumber, verbose = MOLVerbosity(SciMLLogging.None()))
     args = arguments(a)
     T = args[1]
 
     pairs = args[3] .=> broadcast_reduce.((f,), fold.(args[4:end], (verbose,)), (b,), verbose)
-    return Construct_ArrayMaker(args[2], pairs)
+    return Construct_ArrayMaker(pairs)
 end
 
-function broadcast_reduce(f, a::ArrayMaker, b::ArrayMaker, verbose = false)
+function broadcast_reduce(f, a::ArrayMaker, b::ArrayMaker, verbose = MOLVerbosity(SciMLLogging.None()))
     args1 = arguments(a)
     args2 = arguments(b)
     T = promote_type(args1[1], args2[1])
@@ -101,10 +101,10 @@ function broadcast_reduce(f, a::ArrayMaker, b::ArrayMaker, verbose = false)
     pairs1 = args1[3] .=> fold.(args1[4:end], (verbose,))
     pairs2 = args2[3] .=> fold.(args2[4:end], (verbose,))
     pairs = broadcast_reduce(f, pairs1, pairs2, verbose)
-    return Construct_ArrayMaker(args1[2], pairs)
+    return Construct_ArrayMaker(pairs)
 end
 
-function broadcast_reduce(f, a::Vector{<:Pair}, b::Vector{<:Pair}, verbose = false)
+function broadcast_reduce(f, a::Vector{<:Pair}, b::Vector{<:Pair}, verbose = MOLVerbosity(SciMLLogging.None()))
     rangesa, opsa = a
     rangesb, opsb = b
     ranges = fold_ranges(rangesa, rangesb; verbose=verbose)
@@ -114,65 +114,65 @@ function broadcast_reduce(f, a::Vector{<:Pair}, b::Vector{<:Pair}, verbose = fal
     return pairs
 end
 
-function broadcast_reduce(f, a::ArrayOp, b::ArrayOp, verbose = false)
+function broadcast_reduce(f, a::ArrayOp, b::ArrayOp, verbose = MOLVerbosity(SciMLLogging.None()))
     args1 = arguments(a)
     args2 = arguments(b)
     is1 = args1[1]
     is2 = args2[1]
-    verbose && @info "is1 = $is1, is2 = $is2"
+    @SciMLMessage(verbose, :fold) do; "is1 = $is1, is2 = $is2"; end
     expr = broadcast_reduce(f, fold.(args1[2], (verbose,)), fold.(args2[2], (verbose,)), verbose)
-    verbose && @info "expr = $expr"
+    @SciMLMessage(verbose, :fold) do; "expr = $expr"; end
     @assert all(isequal.(is1, is2)) "reducing indices different for $a and $b, got $is1 and $is2"
-    verbose && @info "all(isequal.(is1, is2)) = true"
+    @SciMLMessage("all(isequal.(is1, is2)) = true", verbose, :fold)
     @assert args1[3] == args2[3] "reducing ops different for $a and $b"
-    verbose && @info "args1[3] == args2[3] = true"
+    @SciMLMessage("args1[3] == args2[3] = true", verbose, :fold)
     ranges = _intersection.(map(i_x -> args1[6][i_x], is1), map(i_x -> args2[6][i_x], is2))
 
-    verbose && @info "ranges = $ranges"
+    @SciMLMessage(verbose, :fold) do; "ranges = $ranges"; end
     return FillArrayOp(expr, is, ranges)
 end
 
-function broadcast_reduce(f, a::SNumber, b::ArrayOp, verbose = false)
+function broadcast_reduce(f, a::SNumber, b::ArrayOp, verbose = MOLVerbosity(SciMLLogging.None()))
     args = arguments(b)
     is = args[1]
     expr = f(a, args[2])
-    verbose && @info "expr = $expr"
+    @SciMLMessage(verbose, :fold) do; "expr = $expr"; end
     ranges = map(i_x -> args[6][i_x], is)
 
-    verbose && @info "ranges = $ranges"
+    @SciMLMessage(verbose, :fold) do; "ranges = $ranges"; end
     return FillArrayOp(expr, is, ranges)
 end
 
-function broadcast_reduce(f, a::ArrayOp, b::Number, verbose = false)
+function broadcast_reduce(f, a::ArrayOp, b::Number, verbose = MOLVerbosity(SciMLLogging.None()))
     args = arguments(a)
     is = args[1]
     expr = f(args[2], b)
     ranges = map(i_x -> args[6][i_x], is)
 
-    verbose && @info "ranges = $ranges"
+    @SciMLMessage(verbose, :fold) do; "ranges = $ranges"; end
     return FillArrayOp(expr, is, ranges)
 end
 
-function broadcast_reduce(f, a::ArrayMaker, b::ArrayOp, verbose = false)
+function broadcast_reduce(f, a::ArrayMaker, b::ArrayOp, verbose = MOLVerbosity(SciMLLogging.None()))
     args = arguments(a)
     pairs = args[3] .=> broadcast_reduce(f, map(i -> (fold.(args[4:end][i], verbose), fold.(b[args[3][i]], verbose)), 1:length(args[3]))..., verbose)
 
-    verbose && @info "pairs = $pairs"
-    return Construct_ArrayMaker(args[2], pairs)
+    @SciMLMessage(verbose, :fold) do; "pairs = $pairs"; end
+    return Construct_ArrayMaker(pairs)
 end
 
-function broadcast_reduce(f, a::ArrayOp, b::ArrayMaker, verbose = false)
+function broadcast_reduce(f, a::ArrayOp, b::ArrayMaker, verbose = MOLVerbosity(SciMLLogging.None()))
     args = arguments(b)
     pairs = args[3] .=> broadcast_reduce(f, map(i -> (fold.(a[args[3][i]], verbose), fold.(args[4:end][i], verbose)), 1:length(args[3]))..., verbose)
 
-    verbose && @info "pairs = $pairs"
-    return Construct_ArrayMaker(args[2], pairs)
+    @SciMLMessage(verbose, :fold) do; "pairs = $pairs"; end
+    return Construct_ArrayMaker(pairs)
 end
 
-broadcast_reduce(f, a::SNumber, b::SNumber, verbose = false) = f(a, b)
+broadcast_reduce(f, a::SNumber, b::SNumber, verbose = MOLVerbosity(SciMLLogging.None())) = f(a, b)
 
 function fold_ranges(A::Vector{<:Pair}, B::Vector{<:Pair};
-                                    keep_pairs::Bool=true, sort_output::Bool=true, verbose = false)
+                                    keep_pairs::Bool=true, sort_output::Bool=true, verbose = MOLVerbosity(SciMLLogging.None()))
     rangesa, opsa = A
     rangesb, opsb = B
     ranges = fold_ranges(rangesa, rangesb; verbose=verbose)
@@ -198,7 +198,7 @@ _bounds(x::Integer) = (x, x)
 _bounds(r::UnitRange{<:Integer}) = (first(r), last(r))
 
 function fold_ranges(A::Vector{<:NamedTuple}, B::Vector{<:NamedTuple};
-                                    keep_pairs::Bool=true, sort_output::Bool=true, verbose = false)
+                                    keep_pairs::Bool=true, sort_output::Bool=true, verbose = MOLVerbosity(SciMLLogging.None()))
     return fold_ranges(map(x -> x.region, A), map(x -> x.region, B); keep_pairs=keep_pairs, sort_output=sort_output, verbose=verbose)
 end
 
@@ -218,29 +218,29 @@ indices of A/B that contributed to that region. `pairs` lists all (i,j) pairs
 `sort_output`: if true, order regions lexicographically by (lo,hi) per dimension.
 """
 function fold_ranges(A::Vector{<:Tuple}, B::Vector{<:Tuple};
-                                    keep_pairs::Bool=true, sort_output::Bool=true, verbose = false)
+                                    keep_pairs::Bool=true, sort_output::Bool=true, verbose = MOLVerbosity(SciMLLogging.None()))
     # Dict: region_tuple => (Set of A idxs, Set of B idxs, Set of pairs)
     prov = Dict{Tuple, Tuple{Set{Int}, Set{Int}, Set{Tuple{Int,Int}}}}()
 
     for (ia, a) in enumerate(A)
-        verbose && @info "A[$ia] = $a"
+        @SciMLMessage(verbose, :fold) do; "A[$ia] = $a"; end
         an = map(_normalize, a)
         for (ib, b) in enumerate(B)
-            verbose && @info "B[$ib] = $b"
+            @SciMLMessage(verbose, :fold) do; "B[$ib] = $b"; end
             bn = map(_normalize, b)
             length(an) == length(bn) || throw(ArgumentError("A[$ia] and B[$ib] have different dimensionality"))
             ints = map(_intersect, an, bn)
-            verbose && @info "ints = $ints"
+            @SciMLMessage(verbose, :fold) do; "ints = $ints"; end
             any(x -> x === nothing, ints) && continue
             region = ints |> Tuple
 
             if haskey(prov, region)
-                verbose && @info "haskey(prov, region) = true"
+                @SciMLMessage("haskey(prov, region) = true", verbose, :fold)
                 Sa, Sb, Sp = prov[region]
                 push!(Sa, ia); push!(Sb, ib)
                 keep_pairs && push!(Sp, (ia, ib))
             else
-                verbose && @info "haskey(prov, region) = false"
+                @SciMLMessage("haskey(prov, region) = false", verbose, :fold)
                 Sa = Set([ia]); Sb = Set([ib])
                 Sp = Set{Tuple{Int,Int}}()
                 keep_pairs && push!(Sp, (ia, ib))
@@ -252,7 +252,7 @@ function fold_ranges(A::Vector{<:Tuple}, B::Vector{<:Tuple};
     out = Vector{NamedTuple}(undef, length(prov))
     i = 1
     for (region, (Sa, Sb, Sp)) in prov
-        verbose && @info "region = $region"
+        @SciMLMessage(verbose, :fold) do; "region = $region"; end
         out[i] = (
             region = region,
             A_idxs = sort!(collect(Sa)),
@@ -262,7 +262,7 @@ function fold_ranges(A::Vector{<:Tuple}, B::Vector{<:Tuple};
         i += 1
     end
 
-    verbose && @info "out = $out"
+    @SciMLMessage(verbose, :fold) do; "out = $out"; end
     if sort_output
         # lexicographic by (lo,hi) per dimension
         keyfn = nt -> map(_bounds, nt.region) |> collect

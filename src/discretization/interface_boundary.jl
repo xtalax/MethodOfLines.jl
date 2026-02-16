@@ -3,12 +3,18 @@ struct RefCartesianIndex{IType,AType,N} <: Base.AbstractCartesianIndex{N}
     A::AType
     RefCartesianIndex(I::IType, A=nothing) where {IType} = new{IType,typeof(A),length(I)}(I, A)
 end
-Base.length(IR::SymbolicUtils.BasicSymbolic{CartesianIndex}) = length(arguments(IR))
+#Base.length(IR::SymbolicUtils.BasicSymbolic{CartesianIndex}) = length(arguments(IR))
 Base.length(IR::RefCartesianIndex) = length(IR.I)
 Base.getindex(A::AbstractArray, IR::RefCartesianIndex) = IR.A === nothing ? A[IR.I] : IR.A[IR.I]
+
+struct RefIndex{A, T}
+    A::A
+    i::T
+end
+
 Base.getindex(I::RefCartesianIndex, i::Int) = RefIndex(I.A, I.I[i])
 
-const SCartesianIndex = Union{CartesianIndex, SymbolicUtils.BasicSymbolic{<:CartesianIndex}}
+const SCartesianIndex = Union{CartesianIndex, SymbolicUtils.BasicSymbolic}
 
 Base.:+(I::RefCartesianIndex, J::SCartesianIndex) = RefCartesianIndex(I.I + J, I.A)
 Base.:-(I::RefCartesianIndex, J::SCartesianIndex) = RefCartesianIndex(I.I - J, I.A)
@@ -29,10 +35,10 @@ struct OrderedIndexArray{T,N,A<:AbstractArray{T,N}} <: AbstractArray{T,N}
 end
 
 struct IfCartesianIndex{T1,T2, N} <: Base.AbstractCartesianIndex{N}
-    condition::Union{Bool, SymbolicUtils.BasicSymbolic{Bool}}
+    condition::Union{Bool, SymbolicUtils.BasicSymbolic{SymReal}}
     I1::T1
     I2::T2
-    IfCartesianIndex(condition::Union{Bool, SymbolicUtils.BasicSymbolic{Bool}}, I1::T1, I2::T2) where {T1,T2} = new{T1,T2,length(I1)}(condition, I1, I2)
+    IfCartesianIndex(condition::Union{Bool, SymbolicUtils.BasicSymbolic{SymReal}}, I1::T1, I2::T2) where {T1,T2} = new{T1,T2,length(I1)}(condition, I1, I2)
 end
 
 Base.length(I::IfCartesianIndex{<:Any,<:Any,N}) where {N} = N
@@ -47,6 +53,8 @@ Base.getindex(I::IfCartesianIndex, j::Int) = ifelse(I.condition,  I.I1[j], I.I2[
 Base.getindex(o::OrderedIndexArray, I::SCartesianIndex) = o[I[o.index]]
 Base.getindex(o::OrderedIndexArray{T,N}, is::Vararg{Int}) where {T,N} = o[CartesianIndex(is...)]
 Base.getindex(o::OrderedIndexArray, I::Vararg{<:SymbolicUtils.BasicSymbolic}) = o[CartesianIndex(I...)]
+# Disambiguate single BasicSymbolic index (matches both SCartesianIndex and Vararg)
+Base.getindex(o::OrderedIndexArray, I::SymbolicUtils.BasicSymbolic) = SymbolicUtils.term(getindex, o.array, I; type=Real)
 
 struct OffsetExtendingArray{T,N,A<:AbstractArray{T,N},B<:AbstractArray{T,N}} <: AbstractArray{T,N}
     array1::A
@@ -108,7 +116,7 @@ end
 
 
 
-function Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbolic{<:Integer}, is...) where {T,N}
+function Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbolic{SymReal}, is...) where {T,N}
     I = vcat(i, is...)
     I = I + o.offset * unitindex(N, o.direction)
     ifelse(I[o.direction] > size(o.array1, o.direction),
@@ -118,7 +126,7 @@ function Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbo
     #end
 end
 
-function Base.getindex(o::OffsetExtendingArray{T,N}, I::Vararg{<:SymbolicUtils.BasicSymbolic{<:Integer}}) where {T,N}
+function Base.getindex(o::OffsetExtendingArray{T,N}, I::Vararg{<:SymbolicUtils.BasicSymbolic{SymReal}}) where {T,N}
     I = CartesianIndex(I...)
     return getindex(o, I)
 end
@@ -145,7 +153,7 @@ function Base.size(o::OffsetExtendingArray{T,N}, i::Int) where {T,N}
     end
 end
 
-Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbolic{<:Integer}, is::Vararg{<:SymbolicUtils.BasicSymbolic{<:Integer}}) where {T,N} = SymbolicUtils.term(o, i, is...; type = T)
+Base.getindex(o::OffsetExtendingArray{T,N}, i::SymbolicUtils.BasicSymbolic{SymReal}, is::Vararg{<:SymbolicUtils.BasicSymbolic{SymReal}}) where {T,N} = SymbolicUtils.term(getindex, o, i, is...; type = SymReal)
 
 function bwrap(I, bs, s, j, isx=false)
     for b in bs
@@ -160,6 +168,9 @@ function bwrap(udisc::AbstractArray, bs, s, j, isx=false)
     end
     return udisc
 end
+
+# Non-interface boundaries don't expand the array
+expand(udisc::AbstractArray, b::PDEBase.AbstractBoundary, s, j, isx) = udisc
 
 function expand(udisc::AbstractArray, b::InterfaceBoundary, s, j, isx)
     u = b.u
@@ -235,8 +246,8 @@ function _wrapinterface(I, s, b::InterfaceBoundary{Val{true}(),Val{false}()}, j,
                          __wrapinterface(I, s, b, true, l1, j, isx),
                          RefCartesianIndex(I))
 end
-Base.getindex(I::SymbolicUtils.BasicSymbolic{<:SCartesianIndex}, j::Int) = arguments(I)[j]
-Base.length(I::SymbolicUtils.BasicSymbolic{<:SCartesianIndex})  = 
+#Base.getindex(I::SymbolicUtils.BasicSymbolic{<:SCartesianIndex}, j::Int) = arguments(I)[j]
+#Base.length(I::SymbolicUtils.BasicSymbolic{<:SCartesianIndex})  = 
 
 function _wrapinterface(I, s, b::InterfaceBoundary{B,B}, j, isx) where {B}
     throw(ArgumentError("Interface $(b.eq) joins two variables at the same end of the domain, this is not supported. Please post an issue if you need this feature."))

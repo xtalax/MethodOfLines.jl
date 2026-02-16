@@ -100,6 +100,18 @@ function calculate_stencil_extents(s, u, discretization, orders, bcmap)
                 upperextents[j] = max(upperextents[j], extent(advection_scheme, dorder))
             end
         end
+        # Even-order derivatives (centered difference) need stencil clearance
+        # when boundaries exist — the centered stencil at near-boundary points
+        # would access out-of-bounds indices without sufficient clearance.
+        for dorder in filter(iseven, orders[x])
+            half_width = div(aorder + dorder - 1, 2)
+            if haslower
+                lowerextents[j] = max(lowerextents[j], half_width)
+            end
+            if hasupper
+                upperextents[j] = max(upperextents[j], half_width)
+            end
+        end
     end
     return lowerextents, upperextents
 end

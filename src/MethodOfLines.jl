@@ -3,13 +3,14 @@ using LinearAlgebra
 using SciMLBase
 using DiffEqBase
 using PDEBase
-import PDEBase: get_time
+using SciMLLogging
+import PDEBase: get_time, generate_ic_defaults
 using ModelingToolkit
 using ModelingToolkit: operation, istree, arguments, variable, get_metadata, get_unknowns
 using SymbolicUtils, Symbolics
 using Symbolics: wrap, unwrap, solve_for, expand_derivatives, diff2term, setname, rename,
-    similarterm, symtype, ArrayOp, ArrayMaker, scalarize
-using SymbolicUtils: operation, arguments
+    similarterm, symtype, scalarize
+using SymbolicUtils: operation, arguments, ArrayMaker, ArrayOp
 using IfElse
 using StaticArrays
 using Interpolations
@@ -26,7 +27,8 @@ import Base.checkbounds
 import Base.getproperty
 import Base.ndims
 
-Symbolics.show_arrayop[] = true
+# Logging
+include("logging.jl")
 
 # Interface
 include("interface/grid_types.jl")
@@ -40,7 +42,6 @@ include("MOL_symbolic_utils.jl")
 include("MOL_utils.jl")
 include("discretization/array_form/stencil_utils.jl")
 include("broadcast_substitute.jl")
-include("fold_array_maker.jl")
 
 # System Parsing
 include("system_parsing/pde_system_transformation.jl")
@@ -93,6 +94,7 @@ include("array_discretization.jl")
 
 # Solution Interface
 include("interface/solution/MOLMetadata.jl")
+include("interface/solution/MOLPDEProblem.jl")
 include("interface/solution/solution_utils.jl")
 include("interface/solution/common.jl")
 include("interface/solution/timedep.jl")
@@ -102,8 +104,14 @@ include("interface/solution/timeindep.jl")
 include("error_analysis.jl")
 include("MOL_discretization.jl")
 
-export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace, fold_ranges
+export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace, fold_ranges, MOLVerbosity
 
 export UpwindScheme, WENOScheme
+
+# Re-export SciMLLogging presets and levels for user convenience
+using SciMLLogging: None, Minimal, Standard, Detailed, All,
+    Silent, DebugLevel, InfoLevel, WarnLevel, ErrorLevel
+export None, Minimal, Standard, Detailed, All,
+    Silent, DebugLevel, InfoLevel, WarnLevel, ErrorLevel
 
 end

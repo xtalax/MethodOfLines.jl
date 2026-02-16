@@ -7,7 +7,6 @@ function weno(interior, s::DiscreteSpace, wenoscheme::WENOScheme, bs, jx, u, dx:
     ε = wenoscheme.epsilon
 
     interior = get_interior(u, s, interior)
-    ranges = get_ranges(u, s)
     is = get_is(u, s)
 
     II = CartesianIndex(is...)
@@ -68,7 +67,7 @@ function weno(interior, s::DiscreteSpace, wenoscheme::WENOScheme, bs, jx, u, dx:
     hm = wm1 * hm1 + wm2 * hm2 + wm3 * hm3
 
     expr = (hp - hm) / dx
-    return FillArrayMaker(recursive_unwrap(expr), is, ranges, interior)[interior...]
+    return FillArrayOp(recursive_unwrap(expr), is, interior)
 end
 
 function weno(interior, s::DiscreteSpace, b, jx, u, dx::AbstractVector)

@@ -20,10 +20,12 @@ A discretization algorithm.
 - `grid_align`: The grid alignment types. See [`CenterAlignedGrid()`](@ref) and [`EdgeAlignedGrid()`](@ref).
 - `use_ODAE`: If `true`, the discretization will use the `ODAEproblem` constructor.
     Defaults to `false`.
+- `verbose`: Verbosity control. Pass a `MOLVerbosity` specifier, a `Bool`, or a preset like
+    `SciMLLogging.None()`, `SciMLLogging.Standard()`, etc. Defaults to `MOLVerbosity()` (Standard preset).
 - `kwargs`: Any other keyword arguments you want to pass to the `ODEProblem`.
 
 """
-struct MOLFiniteDifference{G,D} <: PDEBase.AbstractEquationSystemDiscretization
+struct MOLFiniteDifference{G,D,V} <: PDEBase.AbstractEquationSystemDiscretization
     dxs
     time
     approx_order::Int
@@ -32,17 +34,21 @@ struct MOLFiniteDifference{G,D} <: PDEBase.AbstractEquationSystemDiscretization
     should_transform::Bool
     use_ODAE::Bool
     disc_strategy::D
-    verbose_schemes::Bool
+    verbose::V
     kwargs
 end
 
 # Constructors. If no order is specified, both upwind and centered differences will be 2nd order
-function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_scheme = UpwindScheme(), grid_align=CenterAlignedGrid(), discretization_strategy = ArrayDiscretization(), upwind_order = nothing, should_transform = true, use_ODAE = false, verbose_schemes = true, kwargs...)
+function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_scheme = UpwindScheme(), grid_align=CenterAlignedGrid(), discretization_strategy = ArrayDiscretization(), upwind_order = nothing, should_transform = true, use_ODAE = false, verbose = MOLVerbosity(), kwargs...)
+    verbose = _process_mol_verbose(verbose)
+
     if upwind_order !== nothing
-        @warn "`upwind_order` no longer does anything, and will be removed in a future release. See the docs for the current interface."
+        @SciMLMessage("`upwind_order` no longer does anything, and will be removed in a future release. See the docs for the current interface.",
+            verbose, :deprecation)
     end
     if approx_order % 2 != 0
-        @warn "Discretization approx_order must be even, rounding up to $(approx_order+1)"
+        @SciMLMessage("Discretization approx_order must be even, rounding up to $(approx_order+1)",
+            verbose, :grid)
     end
     @assert approx_order >= 1 "approx_order must be at least 1"
 
@@ -50,7 +56,7 @@ function MOLFiniteDifference(dxs, time=nothing; approx_order = 2, advection_sche
 
     dxs = dxs isa Dict ? dxs : Dict(dxs)
 
-    return MOLFiniteDifference{typeof(grid_align), typeof(discretization_strategy)}(dxs, time, approx_order, advection_scheme, grid_align, should_transform, use_ODAE, discretization_strategy, verbose_schemes, kwargs)
+    return MOLFiniteDifference{typeof(grid_align), typeof(discretization_strategy), typeof(verbose)}(dxs, time, approx_order, advection_scheme, grid_align, should_transform, use_ODAE, discretization_strategy, verbose, kwargs)
 end
 
 PDEBase.get_time(disc::MOLFiniteDifference) = disc.time

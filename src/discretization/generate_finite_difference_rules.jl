@@ -119,6 +119,6 @@ function generate_finite_difference_rules(interior, s::DiscreteSpace, depvars,
         integration_rules = []
     end
 
-    integration_rules = vcat(integration_rules, vec(generate_whole_domain_integration_rules(interior, s, depvars, indexmap, terms)))
+    integration_rules = vcat(integration_rules, vec(generate_whole_domain_integration_rules(interior, s, depvars, indexmap, terms, nothing)))
     return vcat(vec(spherical_diffusion_rules), vec(nonlinlap_rules), vec(central_deriv_rules_cartesian), vec(advection_rules), integration_rules)
 end

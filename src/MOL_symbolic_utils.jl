@@ -1,8 +1,10 @@
+_has_integral_term(term) = istree(term) && (operation(term) isa Integral || any(_has_integral_term, arguments(term)))
+
 """
 Counts the Differential operators for given variable x. This is used to determine
 the order of a PDE.
 """
-function count_differentials(term, x::Symbolics.Symbolic)
+function count_differentials(term, x)
     S = Symbolics
     SU = SymbolicUtils
     if !S.istree(term)
@@ -20,7 +22,7 @@ end
 """
 return list of differential orders in the equation
 """
-function differential_order(eq, x::Symbolics.Symbolic)
+function differential_order(eq, x)
     S = Symbolics
     SU = SymbolicUtils
     orders = Set{Int}()
@@ -143,7 +145,7 @@ function _split_terms(term, ivs)
     if S.istree(term)
         # Additional handling for upwinding
         if (operation(term) == *)
-            args = SU.arguments(term)
+            args = collect(SU.arguments(term))
             for (i, arg) in enumerate(args)
                 # Incase of upwinding, we need to keep the original term
                 if S.istree(arg) && operation(arg) isa Differential
@@ -151,28 +153,26 @@ function _split_terms(term, ivs)
                     try
                         args[i] = operation(arg)(flatten_division.(SU.arguments(arg))...)
                     catch e
-                        println("Argument to derivative in $term is not a dependant variable, is trivially differentiable or is otherwise not differentiable.")
-                        throw(e)
+                        throw(ArgumentError("Argument to derivative in $term is not a dependent variable, is trivially differentiable or is otherwise not differentiable."))
                     end
                     return [*(flatten_division.(args)...)]
                 end
             end
             return mapreduce(st, vcat, SU.arguments(term))
         elseif (operation(term) == /)
-            args = SU.arguments(term)
+            args = collect(SU.arguments(term))
             # Incase of upwinding or spherical, we need to keep the original term
             if S.istree(args[1])
                 if args[1] isa Differential
                     try
                         args[1] = operation(arg)(flatten_division.(SU.arguments(arg))...)
                     catch e
-                        println("Argument to derivative in $term is not a dependant variable, is trivially differentiable or is otherwise not differentiable.")
-                        throw(e)
+                        throw(ArgumentError("Argument to derivative in $term is not a dependent variable, is trivially differentiable or is otherwise not differentiable."))
                     end
                     return [/(flatten_division.(args)...)]
                     # Handle with care so that spherical still works
                 elseif operation(args[1]) == *
-                    subargs = SU.arguments(args[1])
+                    subargs = collect(SU.arguments(args[1]))
                     # look for a differential in the arguments
                     for (i, arg) in enumerate(subargs)
                         if S.istree(arg) && operation(arg) isa Differential
@@ -181,8 +181,7 @@ function _split_terms(term, ivs)
                                 subargs[i] = operation(arg)(flatten_division.(SU.arguments(arg))...)
                                 args[1] = operation(args[1])(flatten_division.(subargs)...)
                             catch e
-                                println("Argument to derivative in $term is not a dependant variable, is trivially differentiable or is otherwise not differentiable.")
-                                throw(e)
+                                throw(ArgumentError("Argument to derivative in $term is not a dependent variable, is trivially differentiable or is otherwise not differentiable."))
                             end
                             return [/(flatten_division.(args)...)]
                         end
@@ -246,7 +245,7 @@ not a `Num`.
 function ex2term(term, v)
     istree(term) || return term
     termdvs = collect(get_depvars(term, v.depvar_ops))
-    symdvs = filter(u -> all(x -> !(safe_unwrap(x) isa Number), arguments(u)), termdvs)
+    symdvs = filter(u -> all(x -> !(let xu = safe_unwrap(x); xu isa Number || SymbolicUtils.isconst(xu) end), arguments(u)), termdvs)
     exdv = last(sort(symdvs, by=u -> length(arguments(u))))
     name = Symbol("⟦" * string(term) * "⟧")
     return setname(similarterm(exdv, rename(operation(exdv), name), arguments(exdv)), name)

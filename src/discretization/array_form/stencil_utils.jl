@@ -12,15 +12,15 @@ function upper_boundary_deriv(D, udisc, iboundary, j, is, interior, lenx)
             iboundary), interior, j)
 end
 
-function integral_op_pair(dx, udisc, j, is, ranges, interior, i)
-    prepare_boundary_op((IntegralArrayOp(dx, udisc, i, j, is, ranges, interior),
+function integral_op_pair(dx, udisc, j, is, interior, i)
+    prepare_boundary_op((IntegralArrayOp(dx, udisc, i, j, is, interior),
             i), interior, j)
 end
 
 function prepare_boundary_op(boundaryop, interior, j)
     function maketuple(i)
         out = map(1:length(interior)) do k
-            k == j ? i : interior[k]
+            k == j ? (i isa Integer ? (i:i) : i) : interior[k]
         end
         return Tuple(out)
     end
@@ -31,7 +31,7 @@ end
 function prepare_boundary_ops(boundaryops, interior, j)
     function maketuple(i)
         out = map(1:length(interior)) do k
-            k == j ? i : interior[k]
+            k == j ? (i isa Integer ? (i:i) : i) : interior[k]
         end
         return Tuple(out)
     end
@@ -42,19 +42,30 @@ end
 
 function interior_deriv(D::DerivativeOperator{T,N,Wind,DX}, udisc, s, offsets, j, is, interior, bs, isx = false) where {T,N,Wind,DX<:Number}
     weights = D.stencil_coefs
-    taps = offsets .+ is[j]
-    InteriorDerivArrayOp(weights, taps, udisc, s, j, is, interior, bs, isx)
+    # ArrayOp shapes are always 1-based. Offset taps to map from 1-based
+    # iteration index to actual grid position.
+    grid_offsets = map(r -> first(r) - 1, interior)
+    taps = offsets .+ (is[j] + grid_offsets[j])
+    onebased_interior = map(r -> 1:length(r), interior)
+    InteriorDerivArrayOp(weights, taps, udisc, s, j, is, onebased_interior, bs, isx, grid_offsets)
 end
 
 function interior_deriv(D::DerivativeOperator{T,N,Wind,DX}, udisc, s, offsets, j, is, interior, bs, isx = false) where {T,N,Wind,DX<:AbstractVector}
-    @assert length(bs) == 0 "Interface boundary conditions are not yet supported for nonuniform dx dimensions, such as $x, please post an issue to https://github.com/SciML/MethodOfLines.jl if you need this functionality."
-    weights = D.stencil_coefs[is[j]-D.boundary_point_count]
-    taps = offsets .+ is[j]
-    InteriorDerivArrayOp(weights, taps, udisc, s, j, is, interior, bs, isx)
+    @assert !any(b -> b isa AbstractInterfaceBoundary, bs) "Interface boundary conditions are not yet supported for nonuniform dx dimensions, please post an issue to https://github.com/SciML/MethodOfLines.jl if you need this functionality."
+    grid_offsets = map(r -> first(r) - 1, interior)
+    # For non-uniform dx, stencil_coefs is a Vector{SVector{L,T}} (one set of weights
+    # per interior position). Extract column vectors so each weight can be looked up
+    # symbolically at the current grid index.
+    stencil_idx = is[j] + grid_offsets[j] - D.boundary_point_count
+    stencil_len = length(first(D.stencil_coefs))
+    weight_columns = [Float64[D.stencil_coefs[p][k] for p in eachindex(D.stencil_coefs)] for k in 1:stencil_len]
+    weights = [SymbolicUtils.term(getindex, wc, stencil_idx; type=Real) for wc in weight_columns]
+    taps = offsets .+ (is[j] + grid_offsets[j])
+    onebased_interior = map(r -> 1:length(r), interior)
+    InteriorDerivArrayOp(weights, taps, udisc, s, j, is, onebased_interior, bs, isx, grid_offsets)
 end
 
 function BoundaryDerivArrayOp(weights, taps, udisc, j, is, interior)
-    # * I Possibly needs updating
     Is = map(taps) do tap
         map(1:ndims(udisc)) do i
             if i == j
@@ -65,96 +76,101 @@ function BoundaryDerivArrayOp(weights, taps, udisc, j, is, interior)
         end
     end
     expr = sym_dot(weights, map(I -> udisc[I...], Is))
-
-    symindices = setdiff(1:ndims(udisc), [j])
-    output_idx = Tuple(is[symindices])
-    return FillArrayOp(recursive_unwrap(expr), output_idx, interior[symindices])
+    # Keep all N dimensions: boundary dim j gets 1:1 range.
+    # The expression doesn't use is[j], so it broadcasts over that dimension.
+    full_interior = map(1:length(is)) do i
+        i == j ? (1:1) : interior[i]
+    end
+    return FillArrayOp(recursive_unwrap(expr), Tuple(is), full_interior)
 end
 
 reduce_interior(interior, j) = first(interior[j]) == 1 ? [interior[1:j-1]..., 2:last(interior[j]), interior[j+1:end]...] : interior
 
-function trapezium_sum(ranges, interior, dx, udisc, is, j)
+function trapezium_sum(interior, dx, udisc, is, j)
     N = ndims(udisc)
-    I1 = unitindex(N, j)
-    I = CartesianIndex(is...)
     i = is[j]
-    Im1 = I - I1
     im1 = is[j] - 1
+    Im1 = ntuple(k -> k == j ? im1 : is[k], N)
+    I = ntuple(k -> is[k], N)
     rinterior = reduce_interior(interior, j)
     if dx isa Number
-        expr = (dx*(udisc[Im1] + udisc[I]) / 2)
+        expr = (dx*(udisc[Im1...] + udisc[I...]) / 2)
     else
-        expr = (dx[im1]*udisc[Im1] + dx[i]*udisc[I]) / 2
+        dx_im1 = SymbolicUtils.term(getindex, dx, im1; type=Real)
+        dx_i = SymbolicUtils.term(getindex, dx, i; type=Real)
+        expr = (dx_im1*udisc[Im1...] + dx_i*udisc[I...]) / 2
     end
 
-    return FillArrayMaker(expr, is, ranges, rinterior)[interior...]
+    return FillArrayOp(expr, is, rinterior)
 end
 
-function IntegralArrayOp(dx, udisc, k, j, is, ranges, interior, iswd = false)
+function IntegralArrayOp(dx, udisc, k, j, is, interior, iswd = false)
     if iswd
         interior = [interior[1:j-1]..., 1:size(udisc, j), interior[j+1:end]...]
     end
-    trapop = trapezium_sum(ranges, interior, dx, udisc, is, j)
-    op = sum(trapop[1:(k-first(interior[j])+1)], dims = j)
-
-    return op
+    rinterior = reduce_interior(interior, j)
+    # Build cumulative sum manually since sum(ArrayOp) is not supported
+    # trapezium_sum produces expression for (dx*(u[i-1] + u[i])/2) at each point
+    # We accumulate from first(rinterior[j]) to k
+    N = ndims(udisc)
+    i_sym = is[j]
+    start = first(rinterior[j])
+    acc = Num(0)
+    for idx in start:k
+        im1 = idx - 1
+        Im1 = ntuple(d -> d == j ? im1 : is[d], N)
+        I = ntuple(d -> d == j ? idx : is[d], N)
+        if dx isa Number
+            acc = acc + dx * (udisc[Im1...] + udisc[I...]) / 2
+        else
+            dx_im1 = SymbolicUtils.term(getindex, dx, im1; type=Real)
+            dx_i = SymbolicUtils.term(getindex, dx, idx; type=Real)
+            acc = acc + (dx_im1 * udisc[Im1...] + dx_i * udisc[I...]) / 2
+        end
+    end
+    symindices = setdiff(1:N, [j])
+    return FillArrayOp(acc, is[symindices], rinterior[symindices])
 end
 
-function IntegralArrayMaker(dx, udisc, k, j, is, ranges, interior, iswd = false, )
+function IntegralArrayMaker(dx, udisc, k, j, is, ranges, interior, iswd = false)
     if iswd
         ranges = [ranges[1:j-1]..., 1:size(udisc, j), ranges[j+1:end]...]
     end
 
-    op = IntegralArrayOp(dx, udisc, k, j, is, ranges, interior, iswd)
-    return FillArrayMaker(op, is, ranges, interior)
+    return IntegralArrayOp(dx, udisc, k, j, is, interior, iswd)
 end
 
-function InteriorDerivArrayOp(weights, taps, udisc, s, j, output_idx, interior, bs, isx = false)
-    # * I Possibly needs updating
+function InteriorDerivArrayOp(weights, taps, udisc, s, j, output_idx, interior, bs, isx = false, grid_offsets = nothing)
     Is = map(taps) do tap
-        _is = map(1:ndims(udisc)) do i
+        ntuple(ndims(udisc)) do i
             if i == j
-                tap
+                tap  # Already offset by grid_offsets[j] in interior_deriv
             else
-                output_idx[i]
+                # Offset 1-based iteration index to actual grid position
+                grid_offsets === nothing ? output_idx[i] : output_idx[i] + grid_offsets[i]
             end
         end
-        CartesianIndex(_is...)
     end
-    # Wrap interfaces
-
-    Is = map(Is) do I
-        map(1:ndims(udisc)) do i
-            I[i]
-        end
-    end
-    Is = map(I -> CartesianIndex(I...), Is)
-    expr = sym_dot(weights, map(I -> udisc[I], Is))
-
-
+    expr = sym_dot(weights, map(I -> udisc[I...], Is))
 
     return FillArrayOp(expr, output_idx, interior)
 end
 
 function FillArrayOp(expr, output_idx, interior)
-    ranges = Dict(output_idx .=> interior) # hope this doesn't check bounds eagerly
-    return ArrayOp(Array{symtype(expr),length(output_idx)},
-                   output_idx, expr, +, nothing, ranges)
+    # ArrayOp requires a BasicSymbolic expression; wrap concrete numbers
+    if !(expr isa SymbolicUtils.BasicSymbolic)
+        expr = Symbolics.unwrap(Num(expr))
+    end
+    ranges = Dict(output_idx .=> interior)
+    return ArrayOp{SymReal}(output_idx, expr, +, nothing, ranges)
 end
 
-NullBG_ArrayMaker(ranges, ops) = ArrayMaker{Real}(Tuple(map(r -> r[end] - r[1] + 1, ranges)), vcat(Tuple(ranges) => 0, ops))
+NullBG_ArrayMaker(ranges, ops) = ArrayMaker{SymReal}([ranges, map(p -> p.first, ops)...],
+                                                  [fill(0, last.(ranges)...), map(p -> p.second, ops)...])
 
-Construct_ArrayMaker(ranges, ops) = ArrayMaker{Real}(Tuple(map(r -> r[end] - r[1] + 1, ranges)), ops)
-#Construct_ArrayMaker{T}(ranges, ops) where T = ArrayMaker{T}(Tuple(map(r -> r[end] - r[1] + 1, ranges)), ops)
+Construct_ArrayMaker(ops) = ArrayMaker{SymReal}(map(p -> p.first, ops), map(p -> p.second, ops))
 
-
-FillArrayMaker(expr, is, ranges, interior) = NullBG_ArrayMaker(ranges, [Tuple(interior) => FillArrayOp(expr, is, interior)])
-
-ArrayMakerWrap(udisc, ranges) = Arraymaker{Real}(Tuple(map(r -> r[end] - r[1] + 1, ranges)), [Tuple(ranges) => udisc])
-
-#####
-
-function get_interior(u, s, interior)
+function get_interior(u, s, interior::AbstractDict)
     map(ivs(u, s)) do x
         if haskey(interior, x)
             interior[x]
@@ -163,6 +179,9 @@ function get_interior(u, s, interior)
         end
     end
 end
+
+# Already-converted interior (Vector of ranges) — return as-is
+get_interior(u, s, interior::AbstractVector) = interior
 
 function get_ranges(u, s)
     map(x -> first(axes(s.grid[x])), ivs(u, s))

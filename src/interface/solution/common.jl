@@ -1,4 +1,6 @@
 
+_issymbollike(x) = x isa Num || x isa SymbolicUtils.BasicSymbolic
+
 function (sol::SciMLBase.PDESolution{T,N,S,D})(args...;
     dv=nothing) where {T,N,S,D<:MOLMetadata}
     # Colon reconstructs on gridpoints
@@ -38,9 +40,9 @@ Base.@propagate_inbounds function Base.getindex(A::SciMLBase.PDESolution{T,N,S,D
     if idv !== nothing
         dv = A.dvs[idv]
     end
-    if SciMLBase.issymbollike(sym) && iv !== nothing && isequal(sym, iv)
+    if _issymbollike(sym) && iv !== nothing && isequal(sym, iv)
         A.ivdomain[iiv]
-    elseif SciMLBase.issymbollike(sym) && dv !== nothing && isequal(sym, dv)
+    elseif _issymbollike(sym) && dv !== nothing && isequal(sym, dv)
         A.u[sym]
     else
         error("Invalid indexing of solution. $sym not found in solution.")
@@ -59,9 +61,9 @@ Base.@propagate_inbounds function Base.getindex(A::SciMLBase.PDESolution{T,N,S,D
     if idv !== nothing
         dv = A.dvs[idv]
     end
-    if SciMLBase.issymbollike(sym) && iv !== nothing && isequal(sym, iv)
+    if _issymbollike(sym) && iv !== nothing && isequal(sym, iv)
         A.ivdomains[iiv][args...]
-    elseif SciMLBase.issymbollike(sym) && dv !== nothing && isequal(sym, dv)
+    elseif _issymbollike(sym) && dv !== nothing && isequal(sym, dv)
         A.u[sym][args...]
     else
         error("Invalid indexing of solution")

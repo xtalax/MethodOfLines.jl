@@ -97,7 +97,9 @@ function PDEBase.construct_discrete_space(vars::PDEBase.VariableMap, discretizat
         discx = dx isa Number ? (xdomain[1]:dx:xdomain[2]) : dx
         xhigh = xdomain[2]
         if discx[end] != xhigh
-            @warn "d$x for $x does not divide domain exactly, adding grid point at $x = $(xhigh))."
+            @SciMLMessage(discretization.verbose, :grid) do
+                "d$x for $x does not divide domain exactly, adding grid point at $x = $(xhigh))"
+            end
             discx = collect(discx)
             push!(discx, xhigh)
         end
@@ -130,17 +132,15 @@ function PDEBase.construct_discrete_space(vars::PDEBase.VariableMap, discretizat
 
     depvarsdisc = map(depvars) do u
         op = SymbolicUtils.operation(u)
-        if op isa  SymbolicUtils.BasicSymbolic{SymbolicUtils.FnType{Tuple, Real}}
-            sym = Symbol(string(op))
-        else
-            sym = nameof(op)
-        end
+        sym = nameof(op)
         prepare = S <: ArrayDiscretization ? identity : collect
         if t === nothing
             uaxes = collect(axes(grid[x])[1] for x in arguments(u))
             u => prepare(first(@variables $sym[uaxes...]))
         elseif isequal(SymbolicUtils.arguments(u), [t])
-            u => fill(u, ()) #Create a 0-dimensional array
+            # Pure ODE variable — keep as bare symbolic for ArrayDiscretization
+            # (0-D arrays fail as Dict keys in MTK's build_operating_point).
+            S <: ArrayDiscretization ? (u => u) : (u => fill(u, ()))
         else
             uaxes = collect(axes(grid[x])[1] for x in remove(arguments(u), t))
             u => prepare(first(@variables $sym(t)[uaxes...]))
@@ -263,18 +263,26 @@ arrayvalmaps(s, u, depvars, interior) = vcat(varmaps(s, interior, depvars), grid
 
 @inline function axiesvals(s::DiscreteSpace{N,M,G}, b::AbstractTruncatingBoundary, interior) where {N,M,G<:CenterAlignedGrid}
     u_, x_ = getvars(b)
-    map(ivs(u_, s)) do x
+    spatial_dims = ivs(u_, s)
+    ndim = length(spatial_dims)
+    map(enumerate(spatial_dims)) do (k, x)
         if isequal(x, x_)
             x => s.axies[x][idx(b, s)]
         else
-            x => s.grid[x][interior[x]]
+            # Use full grid, reshaped to N-D with size 1 in all dims except k,
+            # so it broadcasts correctly with N-D BoundaryDerivArrayOps.
+            grid = s.grid[x]
+            shape = ntuple(i -> i == k ? length(grid) : 1, ndim)
+            x => reshape(grid, shape...)
         end
     end
 end
 
 @inline function axiesvals(s::DiscreteSpace{N,M,G}, b::AbstractTruncatingBoundary, interior) where {N,M,G<:EdgeAlignedGrid}
     u_, x_ = getvars(b)
-    map(ivs(u_, s)) do x
+    spatial_dims = ivs(u_, s)
+    ndim = length(spatial_dims)
+    map(enumerate(spatial_dims)) do (k, x)
         if isequal(x, x_)
             i = idx(b, s)
             if i == 1
@@ -285,7 +293,11 @@ end
                 throw(error("Boundaries on interior not implemented for edge aligned grid"))
             end
         else
-            x => s.grid[x][interior[x]]
+            # Use full grid, reshaped to N-D with size 1 in all dims except k,
+            # so it broadcasts correctly with N-D BoundaryDerivArrayOps.
+            grid = s.grid[x]
+            shape = ntuple(i -> i == k ? length(grid) : 1, ndim)
+            x => reshape(grid, shape...)
         end
     end
 end
