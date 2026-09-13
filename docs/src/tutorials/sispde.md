@@ -27,11 +27,12 @@ where ``\int_{0}^{1} S(x)+I(x)dx = 1``.
 Note here elliptic problem has condition ``\int_{0}^{1} S(x)+I(x)dx = 1``.
 
 ```@example sispde
-using DifferentialEquations, ModelingToolkit, MethodOfLines, DomainSets, Plots
+using OrdinaryDiffEq, SteadyStateDiffEq, ModelingToolkit, MethodOfLines,
+    DomainSets, Plots
 
 # Parameters, variables, and derivatives
 @parameters t x
-@parameters dS dI brn ϵ
+@parameters dS=0.5 dI=0.1 brn=3 ϵ=0.1
 @variables S(..) I(..)
 Dt = Differential(t)
 Dx = Differential(x)
@@ -49,8 +50,15 @@ function ratio(x, brn, ϵ)
 end
 
 # 1D PDE and boundary conditions
-eq = [Dt(S(t, x)) ~ dS * Dxx(S(t, x)) - ratio(x, brn, ϵ) * γ(x) * S(t, x) * I(t, x) / (S(t, x) + I(t, x)) + γ(x) * I(t, x),
-    Dt(I(t, x)) ~ dI * Dxx(I(t, x)) + ratio(x, brn, ϵ) * γ(x) * S(t, x) * I(t, x) / (S(t, x) + I(t, x)) - γ(x) * I(t, x)]
+eq = [
+    Dt(S(t, x)) ~
+    dS * Dxx(S(t, x)) -
+    ratio(x, brn, ϵ) * γ(x) * S(t, x) * I(t, x) / (S(t, x) + I(t, x)) +
+    γ(x) * I(t, x),
+    Dt(I(t, x)) ~
+    dI * Dxx(I(t, x)) +
+    ratio(x, brn, ϵ) * γ(x) * S(t, x) * I(t, x) / (S(t, x) + I(t, x)) -
+    γ(x) * I(t, x)]
 bcs = [S(0, x) ~ 0.9 + 0.1 * sin(2 * pi * x),
     I(0, x) ~ 0.1 + 0.1 * cos(2 * pi * x),
     Dx(S(t, 0)) ~ 0.0,
@@ -63,7 +71,7 @@ domains = [t ∈ Interval(0.0, 10.0),
     x ∈ Interval(0.0, 1.0)]
 
 # PDE system
-@named pdesys = PDESystem(eq, bcs, domains, [t, x], [S(t, x), I(t, x)], [dS => 0.5, dI => 0.1, brn => 3, ϵ => 0.1])
+@named pdesys = PDESystem(eq, bcs, domains, [t, x], [S(t, x), I(t, x)], [dS, dI, brn, ϵ])
 
 # Method of lines discretization
 # Need a small dx here for accuracy
@@ -71,7 +79,7 @@ dx = 0.01
 order = 2
 discretization = MOLFiniteDifference([x => dx], t)
 
-# Convert the PDE problem into an ODE problem
+# Convert the PDE system into a DAE problem
 prob = discretize(pdesys, discretization);
 ```
 
@@ -79,9 +87,9 @@ prob = discretize(pdesys, discretization);
 
 ```@example sispde
 # Solving SIS reaction diffusion model
-sol = solve(prob, Tsit5(), saveat=0.2);
+sol = solve(prob; saveat = 0.2);
 
-# Retriving the results
+# Retrieving the results
 discrete_x = sol[x]
 discrete_t = sol[t]
 S_solution = sol[S(t, x)]
@@ -98,8 +106,10 @@ Change the elliptic problem to steady state problem of reaction diffusion equati
 See more solvers in [Steady State Solvers · DifferentialEquations.jl](https://docs.sciml.ai/DiffEqDocs/stable/solvers/steady_state_solve/)
 
 ```@example sispde
-steadystateprob = SteadyStateProblem(prob)
-steadystate = solve(steadystateprob, DynamicSS(Tsit5()))
+sys, tspan = symbolic_discretize(pdesys, discretization)
+odeprob = ODEProblem(mtkcompile(sys), nothing, tspan)
+steadystateprob = SteadyStateProblem(odeprob)
+steadystate = solve(steadystateprob, DynamicSS(FBDF()))
 ```
 
 ### The effect of human mobility on endemic size
@@ -108,16 +118,19 @@ Set the endemic size
 $$f(d_{S},d_{I}) = \int_{0}^{1}I(x;d_{S},d_{I}).$$
 
 ```@example sispde
-function episize!(dS, dI)
-    newprob = remake(prob, p=[dS, dI, 3, 0.1])
+# Get the discretized I variables from the system
+I_vars = filter(s -> contains(string(s), "I("), unknowns(odeprob.f.sys))
+
+function episize!(dS_val, dI_val)
+    newprob = remake(odeprob, p = [dS => dS_val, dI => dI_val, brn => 3, ϵ => 0.1])
     steadystateprob = SteadyStateProblem(newprob)
-    state = solve(steadystateprob, DynamicSS(Tsit5()))
-    y = sum(state[100:end]) / 99
+    steadystate = solve(steadystateprob, DynamicSS(FBDF()))
+    y = sum(steadystate[v] for v in I_vars) * dx
     return y
 end
-episize!(exp(1.0),exp(0.5))
+episize!(exp(1.0), exp(0.5))
 ```
 
 References:
 
-- Allen L J S, Bolker B M, Lou Y, et al. Asymptotic profiles of the steady states for an SIS epidemic reaction-diffusion model[J]. Discrete & Continuous Dynamical Systems, 2008, 21(1): 1.
+  - Allen L J S, Bolker B M, Lou Y, et al. Asymptotic profiles of the steady states for an SIS epidemic reaction-diffusion model[J]. Discrete & Continuous Dynamical Systems, 2008, 21(1): 1.

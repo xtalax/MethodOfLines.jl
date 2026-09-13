@@ -21,13 +21,21 @@ end
 
 edge(s, b, interiormap) = edge(interiormap, s, b.u, x2i(s, b.u, b.x), !isupper(b))
 
-@inline function generate_bc_eqs!(disc_state, s, boundaryvalfuncs, interiormap, boundary::AbstractTruncatingBoundary)
+@inline function generate_bc_eqs!(
+        disc_state, s, boundaryvalfuncs, interiormap, boundary::AbstractTruncatingBoundary
+    )
     args = ivs(depvar(boundary.u, s), s)
     indexmap = Dict([args[i] => i for i in 1:length(args)])
-    vcat!(disc_state.bceqs, generate_bc_eqs(s, boundaryvalfuncs, boundary, interiormap, indexmap))
+    return vcat!(
+        disc_state.bceqs,
+        generate_bc_eqs(s, boundaryvalfuncs, boundary, interiormap, indexmap)
+    )
 end
 
-function generate_bc_eqs!(disc_state, s::DiscreteSpace, boundaryvalfuncs, interiormap, boundary::InterfaceBoundary)
+function generate_bc_eqs!(
+        disc_state, s::DiscreteSpace, boundaryvalfuncs,
+        interiormap, boundary::InterfaceBoundary
+    )
     isupper(boundary) && return
     u_ = boundary.u
     x_ = boundary.x
@@ -35,15 +43,23 @@ function generate_bc_eqs!(disc_state, s::DiscreteSpace, boundaryvalfuncs, interi
     x__ = boundary.x2
     N = ndims(u_, s)
     j = x2i(s, depvar(u_, s), x_)
+    j === nothing && throw(
+        ArgumentError("Interface $(boundary.eq): $(x_) is not an argument of $(u_)")
+    )
+    # Partner is indexed at the same CartesianIndex plus a shift along `j`.
+    check_interface_layout(s, boundary, j)
     # * Assume that the interface BC is of the simple form u(t,0) ~ u(t,1)
     Ioffset = unitindex(N, j) * (length(s, x__) - 1)
     disc1 = s.discvars[depvar(u_, s)]
     disc2 = s.discvars[depvar(u__, s)]
 
-    vcat!(disc_state.bceqs, vec(map(edge(s, boundary, interiormap)) do II
-        disc1[II] ~ disc2[II+Ioffset]
-    end))
-
+    return vcat!(
+        disc_state.bceqs, vec(
+            map(edge(s, boundary, interiormap)) do II
+                disc1[II] ~ disc2[II + Ioffset]
+            end
+        )
+    )
 end
 
 function generate_boundary_val_funcs(s, depvars, boundarymap, indexmap, derivweights)
@@ -53,7 +69,10 @@ function generate_boundary_val_funcs(s, depvars, boundarymap, indexmap, derivwei
             if b isa InterfaceBoundary
                 II -> []
                 # Only make a map if it is actually possible to substitute in the boundary value given the indexmap
-            elseif all(x -> haskey(indexmap, x), filter(x -> !(safe_unwrap(x) isa Number), b.indvars))
+            elseif all(
+                    x -> haskey(indexmap, x),
+                    filter(x -> !(unwrap_const(safe_unwrap(x)) isa Number), b.indvars)
+                )
                 II -> boundary_value_maps(II, s, b, derivweights, indexmap)
             else
                 II -> []
@@ -62,7 +81,10 @@ function generate_boundary_val_funcs(s, depvars, boundarymap, indexmap, derivwei
     end
 end
 
-function boundary_value_maps(II, s::DiscreteSpace{N,M,G}, boundary, derivweights, indexmap) where {N,M,G<:EdgeAlignedGrid}
+function boundary_value_maps(
+        II, s::DiscreteSpace{N, M, G}, boundary, derivweights,
+        indexmap
+    ) where {N, M, G <: EdgeAlignedGrid}
     u_, x_ = getvars(boundary)
 
     ufunc(v, I, x) = s.discvars[v][I]
@@ -78,45 +100,76 @@ function boundary_value_maps(II, s::DiscreteSpace{N,M,G}, boundary, derivweights
     # We need to construct a new index in case the value at the boundary appears in an equation one dimension lower
     II = newindex(u_, II, s, indexmap, shift = true)
 
-    val = filter(z -> z isa Number, arguments(u_))[1]
+    val = unwrap_const(first(filter(z -> unwrap_const(z) isa Number, arguments(u_))))
     r = x_ => val
     othervars = map(boundary.depvars) do v
         substitute(v, r)
     end
-    othervars = filter(v -> (length(arguments(v)) != 1) && any(isequal(x_), arguments(depvar(v, s))), othervars)
+    othervars = filter(
+        v -> (length(arguments(v)) != 1) && any(isequal(x_), arguments(depvar(v, s))),
+        othervars
+    )
 
-    depvarderivbcmaps = [(Differential(x_)^d)(u_) => half_offset_centered_difference(derivweights.halfoffsetmap[1][Differential(x_)^d], II, s, [], (j, x_), u, ufunc) for d in derivweights.orders[x_]]
+    depvarderivbcmaps = [
+        (Differential(x_)^d)(u_) => half_offset_centered_difference(
+            derivweights.halfoffsetmap[1][Differential(x_)^d],
+            II, s, [], (j, x_), u, ufunc
+        ) for d in derivweights.orders[x_]
+    ]
 
-    depvarbcmaps = [v_ => half_offset_centered_difference(derivweights.interpmap[x_], II, s, [], (x2i(s, depvar(v_, s), x_), x_), depvar(v_, s), ufunc) for v_ in [u_; othervars]]
+    depvarbcmaps = [
+        v_ => half_offset_centered_difference(
+            derivweights.interpmap[x_], II, s, [],
+            (x2i(s, depvar(v_, s), x_), x_), depvar(v_, s), ufunc
+        )
+            for v_ in [u_; othervars]
+    ]
 
     # Only make a map if the integral will actually come out to the same number of dimensions as the boundary value
-    integralvs = filter(v -> !any(x -> safe_unwrap(x) isa Number, arguments(v)), boundary.depvars)
+    integralvs = filter(
+        v -> !any(x -> unwrap_const(safe_unwrap(x)) isa Number, arguments(v)), boundary.depvars
+    )
 
-    integralbcmaps = generate_whole_domain_integration_rules(IIold, s, integralvs, indexmap, nothing, x_)
+    integralbcmaps = generate_whole_domain_integration_rules(
+        IIold, s, integralvs, indexmap, nothing, x_
+    )
 
     if boundary isa HigherOrderInterfaceBoundary
         u__ = boundary.u2
         x__ = boundary.x2
         otheru = depvar(u__, s)
+        check_interface_layout(s, boundary, j)
 
         j = x2i(s, otheru, x__)
         is = [II[i] for i in 1:length(II)]
-        is = [is[1:j-1]..., 1, is[j:end]...]
+        is = [is[1:(j - 1)]..., 1, is[j:end]...]
         II = CartesianIndex(is...)
 
-        depvarderivbcmaps = [(Differential(x__)^d)(u__) => half_offset_centered_difference(derivweights.halfoffsetmap[1][Differential(x__)^d], II, s, [], (j, x__), otheru, ufunc) for d in derivweights.orders[x_]]
+        otherderivmaps = [
+            (Differential(x__)^d)(u__) => half_offset_centered_difference(
+                derivweights.halfoffsetmap[1][Differential(x__)^d],
+                II, s, [], (j, x__), otheru, ufunc
+            )
+                for d in derivweights.orders[x_]
+        ]
 
-        depvarbcmaps = [u__ => half_offset_centered_difference(derivweights.interpmap[x__], II, s, [], (j, x__), otheru, ufunc)]
+        otherbcmaps = [
+            u__ => half_offset_centered_difference(
+                derivweights.interpmap[x__], II, s, [], (j, x__), otheru, ufunc
+            ),
+        ]
 
         depvarderivbcmaps = vcat(depvarderivbcmaps, otherderivmaps)
         depvarbcmaps = vcat(depvarbcmaps, otherbcmaps)
     end
 
-
     return vcat(depvarderivbcmaps, integralbcmaps, depvarbcmaps)
 end
 
-function boundary_value_maps(II, s::DiscreteSpace{N,M,G}, boundary, derivweights, indexmap) where {N,M,G<:CenterAlignedGrid}
+function boundary_value_maps(
+        II, s::DiscreteSpace{N, M, G}, boundary, derivweights,
+        indexmap
+    ) where {N, M, G <: StaggeredGrid}
     u_, x_ = getvars(boundary)
     ufunc(v, I, x) = s.discvars[v][I]
 
@@ -130,34 +183,56 @@ function boundary_value_maps(II, s::DiscreteSpace{N,M,G}, boundary, derivweights
     IIold = II
     # We need to construct a new index in case the value at the boundary appears in an equation one dimension lower
     II = newindex(u_, II, s, indexmap)
-    val = filter(z -> z isa Number, arguments(u_))[1]
+    val = unwrap_const(first(filter(z -> unwrap_const(z) isa Number, arguments(u_))))
     r = x_ => val
     othervars = map(boundary.depvars) do v
         substitute(v, r)
     end
-    othervars = filter(v -> (length(arguments(v)) != 1) && any(isequal(x_), arguments(depvar(v, s))), othervars)
+    othervars = filter(
+        v -> (length(arguments(v)) != 1) && any(isequal(x_), arguments(depvar(v, s))),
+        othervars
+    )
 
-    depvarderivbcmaps = [(Differential(x_)^d)(u_) => central_difference(derivweights.map[Differential(x_)^d], II, s, [], (x2i(s, u, x_), x_), u, ufunc) for d in derivweights.orders[x_]]
+    depvarderivbcmaps = [
+        (Differential(x_)^d)(u_) => central_difference(
+            derivweights, II, s, [], (x2i(s, u, x_), x_), u, ufunc, d
+        )
+            for d in derivweights.orders[x_]
+    ]
+    # generate_cartesian_rules(II, s, [u], derivweights, depvarbcmaps, indexmap, []);
     depvarbcmaps = [v_ => s.discvars[depvar(v_, s)][II] for v_ in [u_; othervars]]
 
     # Only make a map if the integral will actually come out to the same number of dimensions as the boundary value
-    integralvs = unwrap.(filter(v -> !any(x -> safe_unwrap(x) isa Number, arguments(v)), boundary.depvars))
+    integralvs = unwrap.(
+        filter(
+            v -> !any(x -> unwrap_const(safe_unwrap(x)) isa Number, arguments(v)), boundary.depvars
+        )
+    )
 
-    integralbcmaps = generate_whole_domain_integration_rules(IIold, s, integralvs, indexmap, nothing, x_)
+    integralbcmaps = generate_whole_domain_integration_rules(
+        IIold, s, integralvs, indexmap, nothing, x_
+    )
 
     # Deal with the other relevant variables if boundary isa InterfaceBoundary
     if boundary isa HigherOrderInterfaceBoundary
         u__ = boundary.u2
         x__ = boundary.x2
         otheru = depvar(u__, s)
+        check_interface_layout(s, boundary, j)
 
         is = [II[i] for i in setdiff(1:length(II), [j])]
         j = x2i(s, otheru, x__)
 
-        is = vcat(is[1:j-1], 1, is[j:end])
+        is = vcat(is[1:(j - 1)], 1, is[j:end])
         II = CartesianIndex(is...)
 
-        otherderivmaps = [(Differential(x__)^d)(u__) => central_difference(derivweights.map[Differential(x__)^d], II, s, [], (x2i(s, otheru, x__), x__), otheru, ufunc) for d in derivweights.orders[x__]]
+        otherderivmaps = [
+            (Differential(x__)^d)(u__) => central_difference(
+                derivweights.map[Differential(x__)^d], II, s,
+                [], (x2i(s, otheru, x__), x__), otheru, ufunc
+            )
+                for d in derivweights.orders[x__]
+        ]
         otherbcmaps = [u__ => s.discvars[otheru][II]]
 
         depvarderivbcmaps = vcat(depvarderivbcmaps, otherderivmaps)
@@ -167,17 +242,97 @@ function boundary_value_maps(II, s::DiscreteSpace{N,M,G}, boundary, derivweights
     return vcat(depvarderivbcmaps, integralbcmaps, depvarbcmaps)
 end
 
+function boundary_value_maps(
+        II, s::DiscreteSpace{N, M, G}, boundary, derivweights,
+        indexmap
+    ) where {N, M, G <: CenterAlignedGrid}
+    u_, x_ = getvars(boundary)
+    ufunc(v, I, x) = s.discvars[v][I]
 
-function generate_bc_eqs(s::DiscreteSpace{N,M,G}, boundaryvalfuncs, boundary::AbstractTruncatingBoundary, interiormap, indexmap) where {N,M,G}
+    depvarderivbcmaps = []
+    depvarbcmaps = []
+
+    # * Assume that the BC is in terms of an explicit expression, not containing references to variables other than u_ at the boundary
+    u = depvar(u_, s)
+    args = ivs(u, s)
+    j = findfirst(isequal(x_), args)
+    IIold = II
+    # We need to construct a new index in case the value at the boundary appears in an equation one dimension lower
+    II = newindex(u_, II, s, indexmap)
+    val = unwrap_const(first(filter(z -> unwrap_const(z) isa Number, arguments(u_))))
+    r = x_ => val
+    othervars = map(boundary.depvars) do v
+        substitute(v, r)
+    end
+    othervars = filter(
+        v -> (length(arguments(v)) != 1) && any(isequal(x_), arguments(depvar(v, s))),
+        othervars
+    )
+
+    depvarderivbcmaps = [
+        (Differential(x_)^d)(u_) => central_difference(
+            derivweights.map[Differential(x_)^d], II,
+            s, [], (x2i(s, u, x_), x_), u, ufunc
+        )
+            for d in derivweights.orders[x_]
+    ]
+    depvarbcmaps = [v_ => s.discvars[depvar(v_, s)][II] for v_ in [u_; othervars]]
+
+    # Only make a map if the integral will actually come out to the same number of dimensions as the boundary value
+    integralvs = unwrap.(
+        filter(
+            v -> !any(x -> unwrap_const(safe_unwrap(x)) isa Number, arguments(v)), boundary.depvars
+        )
+    )
+
+    integralbcmaps = generate_whole_domain_integration_rules(
+        IIold, s, integralvs, indexmap, nothing, x_
+    )
+
+    # Deal with the other relevant variables if boundary isa InterfaceBoundary
+    if boundary isa HigherOrderInterfaceBoundary
+        u__ = boundary.u2
+        x__ = boundary.x2
+        otheru = depvar(u__, s)
+        check_interface_layout(s, boundary, j)
+
+        is = [II[i] for i in setdiff(1:length(II), [j])]
+        j = x2i(s, otheru, x__)
+
+        is = vcat(is[1:(j - 1)], 1, is[j:end])
+        II = CartesianIndex(is...)
+
+        otherderivmaps = [
+            (Differential(x__)^d)(u__) => central_difference(
+                derivweights.map[Differential(x__)^d], II, s,
+                [], (x2i(s, otheru, x__), x__), otheru, ufunc
+            )
+                for d in derivweights.orders[x__]
+        ]
+        otherbcmaps = [u__ => s.discvars[otheru][II]]
+
+        depvarderivbcmaps = vcat(depvarderivbcmaps, otherderivmaps)
+        depvarbcmaps = vcat(depvarbcmaps, otherbcmaps)
+    end
+
+    return vcat(depvarderivbcmaps, integralbcmaps, depvarbcmaps)
+end
+
+function generate_bc_eqs(
+        s::DiscreteSpace{N, M, G}, boundaryvalfuncs,
+        boundary::AbstractTruncatingBoundary, interiormap, indexmap
+    ) where {N, M, G}
     bc = boundary.eq
-    return vec(map(edge(s, boundary, interiormap)) do II
-        boundaryvalrules = mapreduce(f -> f(II), vcat, boundaryvalfuncs)
-        vmaps = varmaps(s, boundary.depvars, II, indexmap)
-        varrules = axiesvals(s, depvar(boundary.u, s), boundary.x, II)
-        rules = vcat(boundaryvalrules, vmaps, varrules)
+    return vec(
+        map(edge(s, boundary, interiormap)) do II
+            boundaryvalrules = mapreduce(f -> f(II), vcat, boundaryvalfuncs)
+            vmaps = varmaps(s, boundary.depvars, II, indexmap)
+            varrules = axiesvals(s, depvar(boundary.u, s), boundary.x, II)
+            rules = Dict(vcat(boundaryvalrules, vmaps, varrules))
 
-        substitute(bc.lhs, rules) ~ substitute(bc.rhs, rules)
-    end)
+            pde_substitute(bc.lhs, rules) ~ pde_substitute(bc.rhs, rules)
+        end
+    )
 end
 
 """
@@ -206,7 +361,10 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
                 break
             end
             for Il in (edge(interiormap, s, u, j, true) .+ (ninterp * I1,))
-                expr = central_difference(derivweights.boundary[x], Il, s, filter_interfaces(bcmap[operation(u)][x]), (j, x), u, ufunc)
+                expr = central_difference(
+                    derivweights.boundary[x], Il, s,
+                    filter_interfaces(bcmap[operation(u)][x]), (j, x), u, ufunc
+                )
                 push!(eqmap[Il], expr)
             end
             ninterp = ninterp - 1
@@ -217,7 +375,10 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
                 break
             end
             for Iu in (edge(interiormap, s, u, j, false) .- (ninterp * I1,))
-                expr = central_difference(derivweights.boundary[x], Iu, s, filter_interfaces(bcmap[operation(u)][x]), (j, x), u, ufunc)
+                expr = central_difference(
+                    derivweights.boundary[x], Iu, s,
+                    filter_interfaces(bcmap[operation(u)][x]), (j, x), u, ufunc
+                )
                 push!(eqmap[Iu], expr)
             end
             ninterp = ninterp - 1
@@ -235,6 +396,7 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
             push!(disc_state.bceqs, s.discvars[u][II] ~ sum(rhss) / n)
         end
     end
+    return
 end
 
 #TODO: Benchmark and optimize this
@@ -258,7 +420,7 @@ end
             setdiff!(domain, vec(copy(edge) .+ [I1 * k]))
         end
     end
-    append!(disc_state.bceqs, s.discvars[u][domain] .~ 0)
+    return append!(disc_state.bceqs, s.discvars[u][domain] .~ 0)
 end
 
 """
@@ -269,17 +431,26 @@ Create a vector containing indices of the corners of the domain.
     if any(lower .== 0) && any(upper .== 0)
         return CartesianIndex{2}[]
     end
-    return reduce(vcat, vec.(map(0:3) do n
-        dig = digits(n, base=2, pad=2)
-        CartesianIndices(Tuple(map(enumerate(dig)) do (i, b)
-            x = args[i]
-            if b == 1
-                1:lower[i]
-            elseif b == 0
-                length(s, x)-upper[i]+1:length(s, x)
+    return reduce(
+        vcat,
+        vec.(
+            map(0:3) do n
+                dig = digits(n, base = 2, pad = 2)
+                CartesianIndices(
+                    Tuple(
+                        map(enumerate(dig)) do (i, b)
+                            x = args[i]
+                            if b == 1
+                                1:lower[i]
+                            elseif b == 0
+                                (length(s, x) - upper[i] + 1):length(s, x)
+                            end
+                        end
+                    )
+                )
             end
-        end))
-    end))
+        )
+    )
 end
 
 @inline function generate_corner_eqs!(disc_state, s, interiormap, pde)

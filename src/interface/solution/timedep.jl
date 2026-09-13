@@ -1,30 +1,66 @@
+function generate_ivgrid(discretespace, ivs, t, metadata::MOLMetadata{G}) where {G}
+    return ((isequal(discretespace.time, x) ? t : discretespace.grid[x] for x in ivs)...,)
+end
 
-function SciMLBase.PDETimeSeriesSolution(sol::SciMLBase.AbstractODESolution{T}, metadata::MOLMetadata) where {T}
+function generate_ivgrid(
+        discretespace, ivs, t, metadata::MOLMetadata{G}
+    ) where {G <: StaggeredGrid}
+    return #TODO ((isequal(discretespace.time, x) ? t : discretespace.grid[x] for x in ivs)...,)
+end
+
+# If the solution is already a PDETimeSeriesSolution, just return it unchanged.
+# This handles cases where wrap_sol is called multiple times (e.g., during error handling).
+function SciMLBase.PDETimeSeriesSolution(
+        sol::SciMLBase.PDETimeSeriesSolution, metadata::MOLMetadata
+    )
+    return sol
+end
+
+function array_observed_solution(sol, discu, observed_equations)
+    for eq in observed_equations
+        lhs = Symbolics.wrap(eq.lhs)
+        lhs isa AbstractArray || continue
+        size(lhs) == size(discu) || continue
+        entries = Symbolics.scalarize(lhs)
+        all(isequal(safe_unwrap(entries[I]), safe_unwrap(discu[I])) for I in CartesianIndices(discu)) || continue
+        evaluator = SymbolicIndexingInterface.observed(sol, eq.lhs)
+        values = evaluator.(
+            SymbolicIndexingInterface.state_values(sol),
+            (SymbolicIndexingInterface.parameter_values(sol),),
+            SymbolicIndexingInterface.current_time(sol)
+        )
+        return map(CartesianIndices(discu)) do I
+            getindex.(values, (I,))
+        end
+    end
+    return nothing
+end
+
+function SciMLBase.PDETimeSeriesSolution(
+        sol::SciMLBase.AbstractODESolution{T}, metadata::MOLMetadata
+    ) where {T}
     try
         odesys = sol.prob.f.sys
         pdesys = metadata.pdesys
         discretespace = metadata.discretespace
 
         ivs = [discretespace.time, discretespace.x̄...]
-        ivgrid = ((isequal(discretespace.time, x) ? sol.t : discretespace.grid[x] for x in ivs)...,)
+        ivgrid = generate_ivgrid(discretespace, ivs, sol.t, metadata)
 
-        solved_states = if metadata.use_ODAE
-            deriv_states = metadata.metadata[]
-            states(odesys)[deriv_states]
-        else
-            states(odesys)
-        end
+        solved_unknowns = unknowns(odesys)
         dvs = discretespace.ū
         # Reshape the solution to flat arrays, faster to do this eagerly.
         umap = mapreduce(vcat, dvs) do u
             let discu = discretespace.discvars[u]
-                solu = map(CartesianIndices(discu)) do I
-                    i = sym_to_index(discu[I], solved_states)
-                    # Handle Observed
-                    if i !== nothing
-                        sol[i, :]
-                    else
-                        SciMLBase.observed(sol, safe_unwrap(discu[I]), :)
+                solu = array_observed_solution(sol, discu, ModelingToolkitBase.observed(odesys))
+                if solu === nothing
+                    solu = map(CartesianIndices(discu)) do I
+                        i = sym_to_index(discu[I], solved_unknowns)
+                        if i !== nothing
+                            sol[i, :]
+                        else
+                            SciMLBase.observed(sol, safe_unwrap(discu[I]), :)
+                        end
                     end
                 end
                 # Correct placement of time axis
@@ -52,15 +88,21 @@ function SciMLBase.PDETimeSeriesSolution(sol::SciMLBase.AbstractODESolution{T}, 
             end
         end |> Dict
         # Build Interpolations
-        interp = build_interpolation(umap, dvs, ivs, ivgrid, sol, pdesys, discretespace.vars.replaced_vars)
+        interp = build_interpolation(
+            umap, dvs, ivs, ivgrid, sol, pdesys, discretespace.vars.replaced_vars
+        )
 
-        return SciMLBase.PDETimeSeriesSolution{T,length(discretespace.ū),typeof(umap),typeof(metadata),
-            typeof(sol),typeof(sol.errors),typeof(sol.t),typeof(ivgrid),
-            typeof(ivs),typeof(pdesys.dvs),typeof(sol.prob),typeof(sol.alg),
-            typeof(interp), typeof(sol.stats)}(umap, sol, sol.errors, sol.t, ivgrid, ivs,
-            pdesys.dvs, metadata, sol.prob, sol.alg,
+        return SciMLBase.PDETimeSeriesSolution{
+            T, length(discretespace.ū), typeof(umap), typeof(metadata),
+            typeof(sol), typeof(sol.errors), typeof(sol.t), typeof(ivgrid),
+            typeof(ivs), typeof(get_dvs(pdesys)), typeof(sol.prob), typeof(sol.alg),
+            typeof(interp), typeof(sol.stats),
+        }(
+            umap, sol, sol.errors, sol.t, ivgrid, ivs,
+            get_dvs(pdesys), metadata, sol.prob, sol.alg,
             interp, sol.dense, sol.tslocation,
-            sol.retcode, sol.stats)
+            sol.retcode, sol.stats
+        )
     catch e
         rethrow(e)
         return sol, e

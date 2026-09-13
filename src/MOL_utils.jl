@@ -1,29 +1,34 @@
 ####
 # Utils for DerivativeOperator generation in schemes
 ####
-@inline clip(II::CartesianIndex{M}, j, N) where {M} = II[j] > N ? II - unitindices(M)[j] : II
-half_range(x) = -div(x, 2):div(x, 2)
+@inline clip(II::CartesianIndex{M}, j, N) where {M} = II[j] > N ? II - unitindices(M)[j] :
+    II
+half_range(x) = (-div(x, 2)):div(x, 2)
 index(i::Int, N::Int) = i + div(N, 2) + 1
 
-function generate_coordinates(i::Int, stencil_x, dummy_x,
-    dx::AbstractVector{T}) where {T<:Real}
+function generate_coordinates(
+        i::Int, stencil_x, dummy_x,
+        dx::AbstractVector{T}
+    ) where {T <: Real}
     len = length(stencil_x)
     stencil_x .= stencil_x .* zero(T)
     for idx in 1:div(len, 2)
         shifted_idx1 = index(idx, len)
         shifted_idx2 = index(-idx, len)
-        stencil_x[shifted_idx1] = stencil_x[shifted_idx1-1] + dx[i+idx-1]
-        stencil_x[shifted_idx2] = stencil_x[shifted_idx2+1] - dx[i-idx]
+        stencil_x[shifted_idx1] = stencil_x[shifted_idx1 - 1] + dx[i + idx - 1]
+        stencil_x[shifted_idx2] = stencil_x[shifted_idx2 + 1] - dx[i - idx]
     end
     return stencil_x
 end
 
 function _get_gridloc(s, ut, is...)
-    u = Sym{SymbolicUtils.FnType{Tuple,Real}}(nameof(operation(ut)))
-    u = operation(s.ū[findfirst(isequal(u), operation.(s.ū))])
+    target_name = nameof(operation(ut))
+    u = operation(s.ū[findfirst(u -> nameof(operation(u)) == target_name, s.ū)])
     args = remove(s.args[u], s.time)
     gridloc = map(enumerate(args)) do (i, x)
-        s.grid[x][is[i]]
+        idx = is[i]
+        idx = idx isa Integer ? idx : Int(unwrap_const(Symbolics.unwrap(idx)))
+        s.grid[x][idx]
     end
     return (u, gridloc)
 end
@@ -38,13 +43,17 @@ function get_gridloc(u, s)
 end
 
 function generate_function_from_gridlocs(analyticmap, gridlocs, s)
-    is_t_first_map = Dict(map(s.ū) do u
-        operation(u) => (findfirst(x -> isequal(s.time, x), arguments(u)) == 1)
-    end)
+    is_t_first_map = Dict(
+        map(s.ū) do u
+            operation(u) => (findfirst(x -> isequal(s.time, x), arguments(u)) == 1)
+        end
+    )
 
-    opsmap = Dict(map(s.ū) do u
-        operation(u) => u
-    end)
+    opsmap = Dict(
+        map(s.ū) do u
+            operation(u) => u
+        end
+    )
 
     fs_ = map(gridlocs) do (uop, x̄)
         is_t_first = is_t_first_map[uop]
@@ -70,10 +79,11 @@ function newindex(u_, II, s, indexmap; shift = false)
     is = map(enumerate(args_)) do (j, x)
         if haskey(indexmap, x)
             II[indexmap[x]]
-        elseif safe_unwrap(x) isa Number
-            if isequal(x, s.axies[args[j]][1])
+        elseif unwrap_const(safe_unwrap(x)) isa Number
+            xval = unwrap_const(safe_unwrap(x))
+            if isequal(xval, s.axies[args[j]][1])
                 1
-            elseif isequal(x, s.axies[args[j]][end])
+            elseif isequal(xval, s.axies[args[j]][end])
                 length(s, args[j]) - (shift ? 1 : 0)
             else
                 error("Boundary value $u_ is not defined at the boundary of the domain, or problem with index adaptation, please post an issue.")
@@ -98,6 +108,11 @@ end
     end
 end
 
+"""
+    chebyspace(N, dom)
+
+Construct `N` Chebyshev-spaced grid points over the domain `dom`.
+"""
 function chebyspace(N, dom)
     interval = dom.domain
     a, b = DomainSets.infimum(interval), DomainSets.supremum(interval)

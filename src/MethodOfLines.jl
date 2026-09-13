@@ -1,22 +1,54 @@
 module MethodOfLines
-using LinearAlgebra
-using SciMLBase
-using DiffEqBase
-using ModelingToolkit
-using ModelingToolkit: operation, istree, arguments, variable, get_metadata, get_states,
-parameters, defaults, varmap_to_vars
-using SymbolicUtils, Symbolics
-using Symbolics: unwrap, solve_for, expand_derivatives, diff2term, setname, rename, similarterm
-using SymbolicUtils: operation, arguments
-using IfElse
-using StaticArrays
-using Interpolations
-using Latexify
+import LinearAlgebra
+using LinearAlgebra: I, cond, dot, diag, diagind
+import SciMLBase
+using SciMLBase: DAEProblem, NonlinearProblem, ODEFunction, ODEProblem, SplitODEProblem
+import DiffEqBase
+import ModelingToolkit
+using ModelingToolkit: get_unknowns,
+    get_eqs, get_bcs, get_dvs,
+    get_ivs
+import ModelingToolkitBase
+using ModelingToolkitBase: @named, @parameters, PDESystem, complete, initialization_equations,
+    mtkcompile, unknowns
+import SymbolicIndexingInterface
+using SymbolicIndexingInterface: NotSymbolic, symbolic_type
+import SymbolicUtils
+using SymbolicUtils: @rule, hasmetadata, setmetadata, substitute, term
+import Symbolics
+using Symbolics: @variables, Differential, Equation, Integral, Num, terms
+using Symbolics: unwrap, symbolic_linear_solve, expand_derivatives, diff2term,
+    symbolic_to_float
+using SymbolicUtils: operation, arguments, iscall, getmetadata, unwrap_const
+import StaticArrays
+using StaticArrays: SVector
+import Interpolations
+using Interpolations: Gridded, Linear, interpolate
+import Latexify
+using Latexify: latexify
+import PrecompileTools
+using PrecompileTools: @compile_workload, @setup_workload
 import DomainSets
+using DomainSets: boundary, interior
+import RuntimeGeneratedFunctions
+RuntimeGeneratedFunctions.init(@__MODULE__)
 
 # See here for the main `symbolic_discretize` and `generate_system` functions
-using PDEBase
-using PDEBase: unitindices, unitindex, remove, insert, sym_dot, VariableMap, depvar, x2i, d_orders, vcat!
+import PDEBase
+using PDEBase: AbstractBoundary, AbstractCartesianDiscreteSpace,
+    AbstractDifferentialDiscretizer, AbstractEquationSystemDiscretization,
+    AbstractTruncatingBoundary, AbstractVarEqMapping, HigherOrderInterfaceBoundary,
+    InterfaceBoundary, LowerBoundary, UpperBoundary, all_ivs, depvars, ex2term,
+    filter_interfaces, flatten_vardict, get_depvars, get_time, getvars,
+    has_derivatives, has_interfaces, haslowerupper, isupper, pde_substitute,
+    safe_unwrap, split_additive_terms, split_terms, subs_alleqs!, subsmatch
+using PDEBase: unitindices, unitindex, remove, insert, sym_dot, VariableMap, depvar, x2i,
+    d_orders, vcat!, update_varmap!, get_ops
+
+# staggered changes
+using DomainSets: Interval
+using PDEBase: error_analysis, add_metadata!
+
 # To Extend
 import PDEBase.interface_errors
 import PDEBase.check_boundarymap
@@ -29,6 +61,7 @@ import PDEBase.construct_differential_discretizer
 import PDEBase.discretize_equation!
 import PDEBase.generate_ic_defaults
 import PDEBase.generate_metadata
+import SciMLBase.symbolic_discretize
 
 import PDEBase.get_time
 import PDEBase.get_eqvar
@@ -43,11 +76,14 @@ import Base.checkbounds
 import Base.getproperty
 import Base.ndims
 
+import SciMLBase.discretize
+
 # Interface
 include("interface/grid_types.jl")
 include("interface/scheme_types.jl")
-include("interface/disc_strategy_types.jl")
+include("interface/callbacks.jl")
 include("interface/MOLFiniteDifference.jl")
+include("interface/PseudospectralDiscretization.jl")
 
 include("discretization/discretize_vars.jl")
 include("MOL_utils.jl")
@@ -68,6 +104,7 @@ include("discretization/schemes/upwind_difference/upwind_diff_weights.jl")
 include("discretization/schemes/half_offset_weights.jl")
 include("discretization/schemes/extrapolation_weights.jl")
 include("discretization/differential_discretizer.jl")
+include("discretization/schemes/callbacks/callback_rules.jl")
 
 # System Parsing
 include("system_parsing/pde_system_transformation.jl")
@@ -78,23 +115,35 @@ include("discretization/interface_boundary.jl")
 # Schemes
 include("discretization/schemes/function_scheme/function_scheme.jl")
 include("discretization/schemes/centered_difference/centered_difference.jl")
+include("discretization/schemes/2nd_order_mixed_deriv/2nd_order_mixed_deriv.jl")
 include("discretization/schemes/upwind_difference/upwind_difference.jl")
 include("discretization/schemes/half_offset_centred_difference.jl")
 include("discretization/schemes/nonlinear_laplacian/nonlinear_laplacian.jl")
 include("discretization/schemes/spherical_laplacian/spherical_laplacian.jl")
+include("discretization/schemes/WENO/nonuniform_weno.jl")
 include("discretization/schemes/WENO/WENO.jl")
 include("discretization/schemes/integral_expansion/integral_expansion.jl")
+include("discretization/schemes/pseudospectral/pseudospectral.jl")
 
 # System Discretization
 include("discretization/generate_finite_difference_rules.jl")
 include("discretization/generate_bc_eqs.jl")
 include("discretization/generate_ic_defaults.jl")
+include("discretization/staggered_discretize.jl")
 
 # Main
-include("scalar_discretization.jl")
+include("discretization/discretize_equations.jl")
+include("discretization/pseudospectral_discretize.jl")
+include("dae_discretization.jl")
 include("MOL_discretization.jl")
 
-export MOLFiniteDifference, discretize, symbolic_discretize, ODEFunctionExpr, generate_code, grid_align, edge_align, center_align, get_discrete, chebyspace
-export UpwindScheme, WENOScheme, FunctionalScheme
+## PrecompileTools
+include("precompile.jl")
+
+# Export
+export MOLFiniteDifference, PseudospectralDiscretization, ChebyshevCollocation,
+    FourierCollocation, discretize, symbolic_discretize, ODEFunctionExpr, generate_code,
+    edge_align, center_align, get_discrete, chebyspace
+export UpwindScheme, WENOScheme, FunctionalScheme, MOLDiscCallback
 
 end

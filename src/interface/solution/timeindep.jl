@@ -1,4 +1,14 @@
-function SciMLBase.PDENoTimeSolution(sol::SciMLBase.NonlinearSolution{T}, metadata::MOLMetadata) where {T}
+# If the solution is already a PDENoTimeSolution, just return it unchanged.
+# This handles cases where wrap_sol is called multiple times (e.g., during error handling).
+function SciMLBase.PDENoTimeSolution(
+        sol::SciMLBase.PDENoTimeSolution, metadata::MOLMetadata
+    )
+    return sol
+end
+
+function SciMLBase.PDENoTimeSolution(
+        sol::SciMLBase.NonlinearSolution{T}, metadata::MOLMetadata
+    ) where {T}
     odesys = sol.prob.f.sys
 
     pdesys = metadata.pdesys
@@ -11,7 +21,7 @@ function SciMLBase.PDENoTimeSolution(sol::SciMLBase.NonlinearSolution{T}, metada
     umap = mapreduce(vcat, dvs) do u
         let discu = discretespace.discvars[u]
             solu = map(CartesianIndices(discu)) do I
-                i = sym_to_index(discu[I], odesys.states)
+                i = sym_to_index(discu[I], get_unknowns(odesys))
                 # Handle Observed
                 if i !== nothing
                     sol.u[i]
@@ -33,11 +43,17 @@ function SciMLBase.PDENoTimeSolution(sol::SciMLBase.NonlinearSolution{T}, metada
         end
     end |> Dict
     # Build Interpolations
-    interp = build_interpolation(umap, dvs, ivs, ivgrid, sol, pdesys, discretespace.vars.replaced_vars)
-
-    return SciMLBase.PDENoTimeSolution{T,length(discretespace.ū),typeof(umap),typeof(metadata),
-        typeof(sol),typeof(ivgrid),typeof(ivs),typeof(pdesys.dvs),typeof(sol.prob),typeof(sol.alg),
-        typeof(interp), typeof(sol.stats)}(umap, sol, ivgrid, ivs,
-        pdesys.dvs, metadata, sol.prob, sol.alg,
-        interp, sol.retcode, sol.stats)
+    interp = build_interpolation(
+        umap, dvs, ivs, ivgrid, sol, pdesys, discretespace.vars.replaced_vars
+    )
+    pdedvs = get_dvs(pdesys)
+    return SciMLBase.PDENoTimeSolution{
+        T, length(discretespace.ū), typeof(umap), typeof(metadata),
+        typeof(sol), typeof(ivgrid), typeof(ivs), typeof(pdedvs), typeof(sol.prob), typeof(sol.alg),
+        typeof(interp), typeof(sol.stats),
+    }(
+        umap, sol, ivgrid, ivs,
+        pdedvs, metadata, sol.prob, sol.alg,
+        interp, sol.retcode, sol.stats
+    )
 end

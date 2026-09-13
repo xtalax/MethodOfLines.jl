@@ -6,16 +6,16 @@
         return
     end
     lower[dim] = lower[dim] + !isupper(b)
-    upper[dim] = upper[dim] + isupper(b)
+    return upper[dim] = upper[dim] + isupper(b)
 end
 
 struct InteriorMap <: AbstractVarEqMapping
-    var
-    pde
-    I
-    lower
-    upper
-    stencil_extents
+    var::Any
+    pde::Any
+    I::Any
+    lower::Any
+    upper::Any
+    stencil_extents::Any
 end
 
 PDEBase.get_eqvar(im::InteriorMap, pde) = im.var[pde]
@@ -27,8 +27,35 @@ PDEBase.get_eqvar(im::InteriorMap, pde) = im.var[pde]
 # then we assign v to it because u is already assigned somewhere else.
 # and use the interior based on the assignment
 
-function PDEBase.construct_var_equation_mapping(pdes::Vector{Equation}, boundarymap, s::DiscreteSpace{N,M}, discretization::MOLFiniteDifference) where {N,M}
+# Mismatched-grid interfaces are only coordinate-aware on the first-order (advection)
+# path via bcoord; centered/half-offset paths are not. Reject orders > 1 up front.
+function validate_interface_orders(pdes, boundarymap, discretization)
+    for b in filter_interfaces(flatten_vardict(boundarymap))
+        mismatched_interface_dxs(b, discretization) || continue
+        orders = union(d_orders(b.x, pdes), d_orders(b.x2, pdes))
+        higher = filter(>(1), orders)
+        if !isempty(higher)
+            throw(
+                ArgumentError(
+                    "Interface $(b.eq) connects $(b.x) and $(b.x2) with mismatched nonuniform grids, " *
+                        "but the system contains spatial derivative orders $(sort(higher)) in these variables. " *
+                        "Only first-order (advection) derivatives are supported across mismatched grids: " *
+                        "higher-order stencils are not coordinate-aware at the interface and would be " *
+                        "silently inaccurate. Use identical step sizes for the connected variables, or " *
+                        "post an issue on GitHub if you need this feature."
+                )
+            )
+        end
+    end
+    return
+end
+
+function PDEBase.construct_var_equation_mapping(
+        pdes::Vector{Equation}, boundarymap, s::DiscreteSpace{N, M},
+        discretization::MOLDiscretization
+    ) where {N, M}
     @assert length(pdes) == M "There must be the same number of equations and unknowns, got $(length(pdes)) equations and $(M) unknowns"
+    validate_interface_orders(pdes, boundarymap, discretization)
     m = buildmatrix(pdes, s)
     varmap = Dict(build_variable_mapping(m, s.ū, pdes))
 
@@ -46,19 +73,22 @@ function PDEBase.construct_var_equation_mapping(pdes::Vector{Equation}, boundary
         # Determine thec number of points to remove from each end of the domain for each dimension
         for b in boundaries
             #@show b
-            clip_interior!!(lower, upper, s, b)
+            clip_interior!!(lower, upper, s, b, discretization)
         end
         push!(vlower, pde => lower)
         push!(vupper, pde => upper)
-        #TODO: Allow assymmetry
+        #TODO: Allow asymmetry
         pdeorders = Dict(map(x -> x => d_orders(x, [pde]), s.x̄))
 
         # Add ghost points to pad stencil extents
-        lowerextents, upperextents = calculate_stencil_extents(s, u, discretization, pdeorders, boundarymap)
+        lowerextents,
+            upperextents = calculate_stencil_extents(
+            s, u, discretization, pdeorders, boundarymap
+        )
         push!(extents, pde => (lowerextents, upperextents))
         lower = [max(e, l) for (e, l) in zip(lowerextents, lower)]
         upper = [max(e, u) for (e, u) in zip(upperextents, upper)]
-        mindomsize = lower.+upper.+1
+        mindomsize = lower .+ upper .+ 1
         if any(tup -> mindomsize[tup[1]] > length(s, tup[2]), enumerate(ivs(u, s)))
             error("The domain is too small to support the requested discretization, got domain size of $(size(s)).")
         end
@@ -66,21 +96,22 @@ function PDEBase.construct_var_equation_mapping(pdes::Vector{Equation}, boundary
         pde => generate_interior(lower, upper, u, s, discretization)
     end
 
-
     pdemap = [k.second => k.first for k in varmap]
-    return InteriorMap(varmap, Dict(pdemap), Dict(interior), Dict(vlower), Dict(vupper), Dict(extents))
+    return InteriorMap(
+        varmap, Dict(pdemap), Dict(interior), Dict(vlower), Dict(vupper), Dict(extents)
+    )
 end
 
-function generate_interior(lower, upper, u, s, disc::MOLFiniteDifference{G,D}) where {G, D<:ScalarizedDiscretization}
+function generate_interior(lower, upper, u, s, disc::MOLDiscretization)
     args = remove(arguments(u), s.time)
 
-    ret = s.Igrid[u][[(1+lower[x2i(s, u, x)]:length(s.grid[x])-upper[x2i(s, u, x)]) for x in args]...]
+    ret = s.Igrid[u][
+        [
+            ((1 + lower[x2i(s, u, x)]):(length(s.grid[x]) - upper[x2i(s, u, x)]))
+                for x in args
+        ]...,
+    ]
     return ret
-end
-
-function generate_interior(lower, upper, u, s, disc::MOLFiniteDifference{G, D}) where {G, D<:ArrayDiscretization}
-    args = remove(arguments(u), s.time)
-    return [(1+lower[x2i(s, u, x)], length(s.grid[x])-upper[x2i(s, u, x)]) for x in args]
 end
 
 function calculate_stencil_extents(s, u, discretization, orders, bcmap)
@@ -91,23 +122,23 @@ function calculate_stencil_extents(s, u, discretization, orders, bcmap)
     lowerextents = zeros(Int, length(args))
     upperextents = zeros(Int, length(args))
 
-    for (j,x) in enumerate(args)
+    for (j, x) in enumerate(args)
         # Skip if periodic in x
         haslower, hasupper = haslowerupper(filter_interfaces(bcmap[operation(u)][x]), x)
         for dorder in filter(isodd, orders[x])
             ascheme = dorder == 1 ? advection_scheme : UpwindScheme()
             if !haslower
-                lowerextents[j] = max(lowerextents[j], extent(ascheme, dorder))
+                lowerextents[j] = max(lowerextents[j], extent(ascheme, dorder, s.dxs[x]))
             end
             if !hasupper
-                upperextents[j] = max(upperextents[j], extent(ascheme, dorder))
+                upperextents[j] = max(upperextents[j], extent(ascheme, dorder, s.dxs[x]))
             end
         end
     end
     return lowerextents, upperextents
 end
 
-function buildmatrix(pdes, s::DiscreteSpace{N,M}) where {N,M}
+function buildmatrix(pdes, s::DiscreteSpace{N, M}) where {N, M}
     m = zeros(Int, M, M)
     elegiblevars = [getvarmap(pde, s) for pde in pdes]
     u2i = Dict([u => k for (k, u) in enumerate(s.ū)])
@@ -124,8 +155,8 @@ function build_variable_mapping(m, vars, pdes)
     notzero(x) = x > 0 ? 1 : 0
     varpdemap = []
     N = length(pdes)
-    rows = sum(m, dims=2)
-    cols = sum(m, dims=1)
+    rows = sum(m, dims = 2)
+    cols = sum(m, dims = 1)
     i = findfirst(isequal(0), rows)
     j = findfirst(isequal(0), cols)
     @assert i === nothing "Equation $(pdes[i[1]]) is not an equation for any of the dependent variables."
@@ -133,7 +164,7 @@ function build_variable_mapping(m, vars, pdes)
     for k in 1:N
         # Check if any of the pdes only have one valid variable
         m_ones = notzero.(m)
-        cols = sum(m_ones, dims=1)
+        cols = sum(m_ones, dims = 1)
         j = findfirst(isequal(1), cols)
         if j !== nothing
             j = j[2]
@@ -148,7 +179,7 @@ function build_variable_mapping(m, vars, pdes)
             continue
         end
         # Check if any of the variables only have one valid pde
-        rows = sum(m_ones, dims=2)
+        rows = sum(m_ones, dims = 2)
         i = findfirst(isequal(1), rows)
         if i !== nothing
             i = i[1]
@@ -186,7 +217,7 @@ Creates a ranking of the variables in the term, based on their derivative order.
 The heuristic that should work is, if there's a time derivative then use that variable, otherwise use the highest derivative for that variable. If there are two with the highest derivative, pick first from the list that hasn't been chosen for another equation
 """
 function get_ranking!(varmap, term, x, s)
-    if !istree(term)
+    if !iscall(term)
         return (0, [])
     end
     S = Symbolics
@@ -203,11 +234,11 @@ function get_ranking!(varmap, term, x, s)
         count, vars = split(children)
         if op isa Differential && isequal(op.x, x)
             for var in vars
-                if varmap[var] < count + 1
-                    varmap[var] = count + 1
+                if varmap[var] < count + op.order
+                    varmap[var] = count + op.order
                 end
             end
-            return (1 + count, vars)
+            return (op.order + count, vars)
         end
         return (count, vars)
     end

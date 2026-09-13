@@ -9,13 +9,18 @@ Used to unpack the solution.
           MOLFiniteDifference object.
 - `pdesys`: a PDESystem object, used in the discretization.
 """
-struct MOLMetadata{hasTime,Ds,Disc,PDE,M,Strat} <: SciMLBase.AbstractDiscretizationMetadata{hasTime}
+struct MOLMetadata{hasTime, Ds, Disc, PDE, M, C} <:
+    SciMLBase.AbstractDiscretizationMetadata{hasTime}
     discretespace::Ds
     disc::Disc
     pdesys::PDE
-    use_ODAE::Bool
     metadata::M
-    function MOLMetadata(discretespace, disc, pdesys, boundarymap, metadata=nothing)
+    complexmap::C
+    u0::Vector
+    function MOLMetadata(
+            discretespace, disc, pdesys, boundarymap, complexmap,
+            metadata = nothing, u0 = []
+        )
         metaref = Ref{Any}()
         metaref[] = metadata
         if discretespace.time isa Nothing
@@ -23,24 +28,19 @@ struct MOLMetadata{hasTime,Ds,Disc,PDE,M,Strat} <: SciMLBase.AbstractDiscretizat
         else
             hasTime = Val(true)
         end
-        use_ODAE = disc.use_ODAE
-        if use_ODAE
-            bcivmap = reduce((d1, d2) -> mergewith(vcat, d1, d2), collect(values(boundarymap)))
-            allbcs = let v = discretespace.vars
-                mapreduce(x -> bcivmap[x], vcat, v.x̄)
-            end
-            if all(bc -> bc.order > 0, allbcs)
-                use_ODAE = false
-            end
-        end
-        return new{hasTime,typeof(discretespace),
-            typeof(disc),typeof(pdesys),
-            typeof(metaref),typeof(disc.disc_strategy)}(discretespace,
-            disc, pdesys, use_ODAE,
-            metaref)
+        return new{
+            hasTime, typeof(discretespace),
+            typeof(disc), typeof(pdesys),
+            typeof(metaref), typeof(complexmap),
+        }(
+            discretespace, disc, pdesys, metaref, complexmap, u0
+        )
     end
 end
 
-function PDEBase.generate_metadata(s::DiscreteSpace, disc::MOLFiniteDifference, pdesys::PDESystem, boundarymap, metadata=nothing)
-    return MOLMetadata(s, disc, pdesys, boundarymap, metadata)
+function PDEBase.generate_metadata(
+        s::DiscreteSpace, disc::MOLDiscretization, pdesys::PDESystem,
+        boundarymap, complexmap, u0 = []
+    )
+    return MOLMetadata(s, disc, pdesys, boundarymap, complexmap, nothing, u0)
 end

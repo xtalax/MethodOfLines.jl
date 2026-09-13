@@ -1,30 +1,96 @@
 # Method of lines discretization scheme
 
-function PDEBase.interface_errors(pdesys::PDESystem, v::PDEBase.VariableMap, discretization::MOLFiniteDifference)
+function PDEBase.interface_errors(
+        pdesys::PDESystem, v::PDEBase.VariableMap, discretization::MOLFiniteDifference
+    )
     depvars = v.ū
     indvars = v.x̄
     for x in indvars
-        @assert haskey(discretization.dxs, Num(x)) || haskey(discretization.dxs, x) "Variable $x has no step size"
+        @assert haskey(discretization.dxs, Num(x))||haskey(discretization.dxs, x) "Variable $x has no step size"
     end
-    if !any(s -> discretization.advection_scheme isa s,  [UpwindScheme, FunctionalScheme])
+    if !any(s -> discretization.advection_scheme isa s, [UpwindScheme, FunctionalScheme])
         throw(ArgumentError("Only `UpwindScheme()` and `FunctionalScheme()` are supported advection schemes. Got $(typeof(discretization.advection_scheme))."))
     end
-    if !(typeof(discretization.disc_strategy) ∈ [ScalarizedDiscretization])
-        throw(ArgumentError("Only `ScalarizedDiscretization()` are supported discretization strategies."))
+    return
+end
+
+# Single predicate shared by check_boundarymap and validate_interface_orders.
+function mismatched_interface_dxs(b, discretization::MOLFiniteDifference)
+    return discretization.dxs[Num(b.x)] != discretization.dxs[Num(b.x2)]
+end
+
+function _interface_physical_coords(b, grid1, grid2)
+    if isupper(b)
+        return grid1[end], grid2[1]
+    else
+        return grid1[1], grid2[end]
     end
 end
 
+function _interface_coords_aligned(coord1, coord2, grid1, grid2)
+    scale = max(abs(grid1[end] - grid1[1]), abs(grid2[end] - grid2[1]))
+    return isapprox(coord1, coord2; atol = sqrt(eps(float(one(scale)))) * scale)
+end
+
+function PDEBase.check_boundarymap(
+        boundarymap, v::PDEBase.VariableMap, discretization::MOLFiniteDifference
+    )
+    return _check_interface_boundarymap(boundarymap, discretization)
+end
+
+# Kept for backwards compatibility with direct 2-arg calls; the PDEBase
+# discretization pipeline invokes the 3-arg hook above.
 function PDEBase.check_boundarymap(boundarymap, discretization::MOLFiniteDifference)
+    return _check_interface_boundarymap(boundarymap, discretization)
+end
+
+function _check_interface_boundarymap(boundarymap, discretization::MOLFiniteDifference)
     bs = filter_interfaces(flatten_vardict(boundarymap))
+    ascheme = discretization.advection_scheme
     for b in bs
         dx1 = discretization.dxs[Num(b.x)]
         dx2 = discretization.dxs[Num(b.x2)]
-        if dx1 != dx2
-            throw(ArgumentError("The step size of the connected variables $(b.x) and $(b.x2) must be the same. If you need nonuniform interface boundaries please post an issue on GitHub."))
+        # Order > 1 upwind stencils are wider than the dynamic interface path
+        # supports. This must be checked before the mismatch gate below, which
+        # would skip same-variable periodic wraps (b.x == b.x2) entirely.
+        if ascheme isa UpwindScheme && ascheme.order > 1 &&
+                (dx1 isa AbstractVector || dx2 isa AbstractVector)
+            throw(ArgumentError("UpwindScheme(order=$(ascheme.order)) is not yet supported with interface or periodic boundary conditions on nonuniform grids, please use the default first order `UpwindScheme()`."))
+        end
+        mismatched_interface_dxs(b, discretization) || continue
+        if dx1 isa AbstractVector && dx2 isa AbstractVector
+            # NU FunctionalScheme uses exact interface coordinates (bcoord) for advection;
+            # dx match waived. Non-advection orders are rejected by validate_interface_orders.
+            if ascheme isa FunctionalScheme && ascheme.is_nonuniform
+                continue
+            end
+            # Same-variable periodic wrap: there is no cross-domain interface
+            # coordinate to align, so skip the alignment check.
+            isequal(b.x, b.x2) && continue
+            # UpwindScheme supports nonuniform grids across the interface as long as the
+            # physical coordinates align at the interface boundary.
+            coord1, coord2 = _interface_physical_coords(b, dx1, dx2)
+            if !_interface_coords_aligned(coord1, coord2, dx1, dx2)
+                throw(
+                    ArgumentError(
+                        "The physical coordinates at the interface between $(b.x) and $(b.x2) must match for nonuniform grids, got $coord1 and $coord2 at the interface. Please ensure the grids align at the interface boundary. Note that cross-domain periodic (ring) topologies are not supported on nonuniform grids."
+                    )
+                )
+            end
+        elseif dx1 isa AbstractVector || dx2 isa AbstractVector
+            throw(ArgumentError("The interface between $(b.x) and $(b.x2) mixes a scalar step size with a nonuniform grid vector, please supply the same kind of grid on both sides."))
+        else
+            throw(ArgumentError("The step size of the connected variables $(b.x) and $(b.x2) must be the same."))
         end
     end
+    return
 end
 
+"""
+    get_discrete(pdesys, discretization)
+
+Return a map from symbolic variables to the grids and discrete variables generated by `discretization`.
+"""
 function get_discrete(pdesys, discretization)
     t = get_time(discretization)
     PDEBase.cardinalize_eqs!(pdesys)
@@ -39,19 +105,19 @@ function get_discrete(pdesys, discretization)
     # Extract tspan
     tspan = t !== nothing ? v.intervals[t] : nothing
     # Find the derivative orders in the bcs
-    bcorders = Dict(map(x -> x => d_orders(x, pdesys.bcs), all_ivs(v)))
+    bcorders = Dict(map(x -> x => d_orders(x, get_bcs(pdesys)), all_ivs(v)))
     # Create a map of each variable to their boundary conditions including initial conditions
-    boundarymap = PDEBase.parse_bcs(pdesys.bcs, v, bcorders)
+    boundarymap = PDEBase.parse_bcs(get_bcs(pdesys), v, bcorders)
     # Check that the boundary map is valid
-    PDEBase.check_boundarymap(boundarymap, discretization)
+    PDEBase.check_boundarymap(boundarymap, v, discretization)
 
     # Transform system so that it is compatible with the discretization
     if should_transform(pdesys, discretization, boundarymap)
         pdesys = PDEBase.transform_pde_system!(v, boundarymap, pdesys, discretization)
     end
 
-    pdeeqs = pdesys.eqs
-    bcs = pdesys.bcs
+    pdeeqs = get_eqs(pdesys)
+    bcs = get_bcs(pdesys)
 
     ############################
     # Discretization of system
@@ -61,21 +127,32 @@ function get_discrete(pdesys, discretization)
     # Create discretized space and variables, this is called `s` throughout
     s = PDEBase.construct_discrete_space(v, discretization)
 
-    return Dict(vcat([Num(x) => s.grid[x] for x in s.x̄], [Num(u) => s.discvars[u] for u in s.ū]))
+    return Dict(
+        vcat(
+            [Num(x) => s.grid[x] for x in s.x̄], [Num(u) => s.discvars[u] for u in s.ū]
+        )
+    )
 end
 
-function ModelingToolkit.ODEFunctionExpr(pdesys::PDESystem,discretization::MethodOfLines.MOLFiniteDifference)
+"""
+    ODEFunctionExpr(pdesys, discretization)
+
+Generate an expression for the ODE function produced by method-of-lines discretization.
+"""
+function ODEFunctionExpr(
+        pdesys::PDESystem, discretization::MethodOfLines.MOLDiscretization
+    )
     sys, tspan = SciMLBase.symbolic_discretize(pdesys, discretization)
-    try
+    return try
         if tspan === nothing
             @assert true "Codegen for NonlinearSystems is not yet implemented."
         else
-            simpsys = structural_simplify(sys)
-            return ODEFunctionExpr(simpsys)
+            simpsys = mtkcompile(sys)
+            return ODEFunction(simpsys; expression = Val{true})
         end
     catch e
         println("The system of equations is:")
-        println(sys.eqs)
+        println(get_eqs(sys))
         println()
         println("Discretization failed, please post an issue on https://github.com/SciML/MethodOfLines.jl with the failing code and system at low point count.")
         println()
@@ -83,25 +160,32 @@ function ModelingToolkit.ODEFunctionExpr(pdesys::PDESystem,discretization::Metho
     end
 end
 
-function SciMLBase.ODEFunction(pdesys::PDESystem, discretization::MethodOfLines.MOLFiniteDifference; analytic=nothing, kwargs...)
+function SciMLBase.ODEFunction(
+        pdesys::PDESystem, discretization::MethodOfLines.MOLDiscretization;
+        analytic = nothing, kwargs...
+    )
     sys, tspan = SciMLBase.symbolic_discretize(pdesys, discretization)
-    try
+    return try
         if tspan === nothing
             @assert true "Codegen for NonlinearSystems is not yet implemented."
         else
-            simpsys = structural_simplify(sys)
+            simpsys = mtkcompile(sys)
+            f_analytic = nothing
             if analytic !== nothing
                 analytic = analytic isa Dict ? analytic : Dict(analytic)
-                s = getfield(sys, :metadata).discretespace
-                us = get_states(simpsys)
+                s = getmetadata(sys, ModelingToolkit.ProblemTypeCtx, nothing).discretespace
+                us = get_unknowns(simpsys)
                 gridlocs = get_gridloc.(us, (s,))
                 f_analytic = generate_function_from_gridlocs(analytic, gridlocs, s)
             end
-            return ODEFunction(simpsys; analytic = f_analytic, discretization.kwargs..., kwargs...)
+            return ODEFunction(
+                simpsys; analytic = f_analytic, eval_module = @__MODULE__,
+                discretization.kwargs..., kwargs...
+            )
         end
     catch e
         println("The system of equations is:")
-        println(sys.eqs)
+        println(get_eqs(sys))
         println()
         println("Discretization failed, please post an issue on https://github.com/SciML/MethodOfLines.jl with the failing code and system at low point count.")
         println()
@@ -109,10 +193,98 @@ function SciMLBase.ODEFunction(pdesys::PDESystem, discretization::MethodOfLines.
     end
 end
 
-function generate_code(pdesys::PDESystem,discretization::MethodOfLines.MOLFiniteDifference,filename="generated_code_of_pdesys.jl")
+"""
+    generate_code(pdesys, discretization[, filename])
+
+Write generated discretized ODE function code for `pdesys` to `filename`.
+"""
+function generate_code(
+        pdesys::PDESystem, discretization::MethodOfLines.MOLDiscretization,
+        filename = "generated_code_of_pdesys.jl"
+    )
     code = ODEFunctionExpr(pdesys, discretization)
     rm(filename; force = true)
-    open(filename, "a") do io
+    return open(filename, "a") do io
         println(io, code)
     end
+end
+
+"""
+    discretize(pdesys, discretization;
+               analytic = nothing, checks = true, fallback = true, kwargs...)
+
+Discretize `pdesys` and return a problem ready to `solve`.
+
+For a time-dependent system this builds a `DAEProblem`. MethodOfLines emits residuals of
+the form `D(u) - f ~ 0`, which are already implicit-DAE form, so no `mtkcompile` is
+needed and the array (slice-form) equations reach the generated code intact. Calling
+`solve(prob)` selects the default DAE algorithm.
+
+A few systems cannot be posed as a first-order DAE — those second order in time, and
+those whose initialization equations `BrownFullBasicInit` would not honour. Those fall
+back to `mtkcompile` plus an `ODEProblem`, which scalarizes the array equations. Pass
+`fallback = false` to make that an error instead.
+
+Supplying `analytic` selects the compiled `ODEProblem` path because analytic solutions
+are attached through the compiled `ODEFunction`.
+
+Time-independent systems have no derivative to keep implicit and discretize to a
+`NonlinearProblem` as before.
+
+Explicit Runge–Kutta methods such as `Tsit5()` solve `ODEProblem`s, not the `DAEProblem`
+returned by this method. To use one, start from `symbolic_discretize` and compile the
+discretized system:
+
+```julia
+sys, tspan = symbolic_discretize(pdesys, discretization)
+prob = ODEProblem(mtkcompile(sys), nothing, tspan)
+sol = solve(prob, Tsit5())
+```
+"""
+function SciMLBase.discretize(
+        pdesys::PDESystem, discretization::MOLDiscretization;
+        analytic = nothing, checks = true, fallback = true, kwargs...
+    )
+    sys, tspan = SciMLBase.symbolic_discretize(pdesys, discretization; checks = checks)
+    if tspan === nothing
+        return _stationary_problem(sys, discretization; kwargs...)
+    end
+    ode_path = analytic !== nothing
+    if !ode_path
+        try
+            return _dae_problem(sys, tspan, discretization; kwargs...)
+        catch e
+            e isa InterruptException && rethrow(e)
+            fallback || rethrow(e)
+            @debug "Falling back to `mtkcompile` and an `ODEProblem`: $(sprint(showerror, e))"
+        end
+    end
+    return _ode_problem(sys, tspan, pdesys, discretization; analytic, kwargs...)
+end
+
+function _stationary_problem(sys, discretization::MOLDiscretization; kwargs...)
+    simpsys = mtkcompile(sys)
+    PDEBase.add_metadata!(getmetadata(sys, ModelingToolkit.ProblemTypeCtx, nothing), sys)
+    u0_guess = Dict(u => 1.0 for u in get_unknowns(simpsys))
+    return NonlinearProblem(
+        simpsys, u0_guess; discretization.kwargs..., kwargs...
+    )
+end
+
+function _ode_problem(
+        sys, tspan, pdesys, discretization::MOLDiscretization; analytic = nothing,
+        kwargs...
+    )
+    simpsys = mtkcompile(sys)
+    PDEBase.add_metadata!(
+        getmetadata(simpsys, ModelingToolkit.ProblemTypeCtx, nothing), sys
+    )
+    prob = ODEProblem(simpsys, nothing, tspan; discretization.kwargs..., kwargs...)
+    analytic === nothing && return prob
+    f = ODEFunction(
+        pdesys, discretization; analytic = analytic, discretization.kwargs..., kwargs...
+    )
+    return ODEProblem(
+        f, prob.u0, prob.tspan, prob.p; discretization.kwargs..., kwargs...
+    )
 end

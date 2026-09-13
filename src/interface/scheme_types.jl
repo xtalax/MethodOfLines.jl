@@ -1,13 +1,20 @@
 abstract type AbstractScheme end
 
+"""
+    UpwindScheme([approx_order])
+
+Upwind finite difference scheme for advection terms.
+"""
 struct UpwindScheme <: AbstractScheme
-    order
-    function UpwindScheme(approx_order=1)
+    order::Any
+    function UpwindScheme(approx_order = 1)
         return new(approx_order)
     end
 end
 
-extent(scheme::UpwindScheme, dorder) = 0# dorder + scheme.order - 1
+extent(scheme::UpwindScheme, dorder) = 0 # dorder + scheme.order - 1
+
+extent(scheme::AbstractScheme, dorder, dx) = extent(scheme, dorder)
 
 # Functional Schemes
 
@@ -18,7 +25,7 @@ F = FunctionalScheme{interior_points, boundary_points}(interior, lower, upper, i
 ```
 A user definable scheme that takes a set of functions as input. The functions define the derivative at the interior, lower boundary, and upper boundary.
 
-`lower` and `upper` should be vectors of functions. In general, `upper` and `lower` must be at least `floor(interior_points/2)` long. Where you have no good approximation for a derivative at the boundary, you can use `nothing` as a placeholder. MethodOfLines will then attempt to use an extrapolation here where nessesary. Be warned that this can lead to instability.
+`lower` and `upper` should be vectors of functions. In general, `upper` and `lower` must be at least `floor(interior_points/2)` long. Where you have no good approximation for a derivative at the boundary, you can use `nothing` as a placeholder. MethodOfLines will then attempt to use an extrapolation here where necessary. Be warned that this can lead to instability.
 
 The boundary functions define the derivative at their index in the function vector, numbering from the boundary. For example, if `boundary_points = 3`, the first function in the vector will define the derivative at the boundary, the second at the boundary plus one step, and the third at the boundary plus two steps.
 
@@ -26,7 +33,7 @@ The functions making up the scheme take the following inputs:
 
 Functions must be of the form `f(u, p, t, deriv_iv, d_iv)`.
 
-Where the function would branch on a value of u, p, t, or d_iv, use IfElse.ifelse instead of standard conditionals.
+Where the function would branch on a value of u, p, t, or d_iv, use `ifelse` instead of standard conditionals.
 
 For the interior, `u` takes a vector of dependent variable values in the direction of the derivative
 of length `interior_points`. `interior_points` must be odd, as this function defines the derivative at the center of the input points.
@@ -75,11 +82,18 @@ struct FunctionalScheme{F, V1, V2, V3} <: AbstractScheme
     name::String
 end
 
-function FunctionalScheme{ips, bps}(interior, lower, upper, is_nonuniform = false, ps = []; name = "FunctionalScheme") where {ips, bps}
+function FunctionalScheme{ips, bps}(
+        interior, lower, upper, is_nonuniform = false,
+        ps = []; name = "FunctionalScheme"
+    ) where {ips, bps}
     @assert ips % 2 == 1 "interior_points must be odd."
-    FunctionalScheme{typeof(interior), typeof(lower),
-                     typeof(upper), typeof(ps)}(interior, lower, upper,
-                                                ips, bps, is_nonuniform, ps, name)
+    return FunctionalScheme{
+        typeof(interior), typeof(lower),
+        typeof(upper), typeof(ps),
+    }(
+        interior, lower, upper,
+        ips, bps, is_nonuniform, ps, name
+    )
 end
 
 function extent(scheme::FunctionalScheme, dorder)
