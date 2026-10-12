@@ -65,6 +65,8 @@ include(joinpath(@__DIR__, "..", "shared", "ode_discretize.jl"))
     traditional_sol[:, 1, 1] .= 0.0 #corners pinned to zero
 
     @test sol[u(t, x, y)] == traditional_sol
+    # Host states are wrapped in place, without a copy.
+    @test MethodOfLines.host_solution(sol.original_sol) === sol.original_sol
 
     @test sol(pi / 2, pi / 2, pi / 2; dv = u(t, x, y)) isa Float64
     @test sol(pi / 2, pi / 2, :) isa Vector{Vector{Float64}}
@@ -112,6 +114,7 @@ end
     solu = map(d -> sol.original_sol[d], grid[u(x, y)])
 
     @test sol[u(x, y)] == solu
+    @test MethodOfLines.host_solution(sol.original_sol) === sol.original_sol
 
     @test sol(pi / 4, pi / 4, dv = u(x, y)) isa Float64
     @test sol(pi / 4, :)[1] isa Vector{Float64}
