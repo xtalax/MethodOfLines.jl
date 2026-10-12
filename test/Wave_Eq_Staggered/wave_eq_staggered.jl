@@ -138,3 +138,30 @@ end
     @test_broken maximum(sol[1:128, 1] .- sol[1:128, test_ind]) < max(dx^2, dt)
     @test_broken maximum(sol[1:128, 1] .- sol[1:128, 2 * test_ind]) < 10 * max(dx^2, dt)
 end
+
+@testset "1D staggered grid with fewer points than the extrapolation stencil" begin
+    @parameters t x
+    @variables E(..) H(..)
+    Dt = Differential(t)
+    Dx = Differential(x)
+    tmax = 0.37
+    eqs = [Dt(E(t, x)) ~ -Dx(H(t, x)), Dt(H(t, x)) ~ -Dx(E(t, x))]
+    bcs = [E(0, x) ~ sin(pi * x), H(0, x) ~ 0, E(t, 0) ~ 0, E(t, 1) ~ 0]
+    domains = [t in Interval(0.0, tmax), x in Interval(0.0, 1.0)]
+    @named pdesys = PDESystem(eqs, bcs, domains, [t, x], [E(t, x), H(t, x)])
+
+    # the boundary extrapolation stencil has 6 points; these grids have 5, 4 and 3
+    for ncells in (4, 3, 2)
+        disc = MOLFiniteDifference(
+            [x => 1 / ncells], t, grid_align = MethodOfLines.StaggeredGrid(),
+            edge_aligned_var = H(t, x)
+        )
+        sol = solve(DAEProblem(pdesys, disc); abstol = 1.0e-12, reltol = 1.0e-12)
+        @test successful_retcode(sol)
+        # sin(pi * x) is a discrete eigenmode with the semi-discrete frequency
+        dx = 1 / ncells
+        ω = 2 / dx * sin(pi * dx / 2)
+        exact = sin.(pi .* (0:dx:1)) .* cos(ω * tmax)
+        @test maximum(abs, sol[E(t, x)][end, :] .- exact) < 1.0e-9
+    end
+end

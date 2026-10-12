@@ -349,6 +349,7 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
     vlower = interiormap.lower[pde]
     vupper = interiormap.upper[pde]
     ufunc(u, I, x) = s.discvars[u][I]
+    interior = interiormap.I[pde]
 
     eqmap = [[] for _ in CartesianIndices(s.discvars[u])]
     for (j, x) in enumerate(args)
@@ -361,6 +362,7 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
                 break
             end
             for Il in (edge(interiormap, s, u, j, true) .+ (ninterp * I1,))
+                Il in interior && continue
                 expr = central_difference(
                     derivweights.boundary[x], Il, s,
                     filter_interfaces(bcmap[operation(u)][x]), (j, x), u, ufunc
@@ -375,6 +377,7 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
                 break
             end
             for Iu in (edge(interiormap, s, u, j, false) .- (ninterp * I1,))
+                Iu in interior && continue
                 expr = central_difference(
                     derivweights.boundary[x], Iu, s,
                     filter_interfaces(bcmap[operation(u)][x]), (j, x), u, ufunc
@@ -385,7 +388,7 @@ function generate_extrap_eqs!(disc_state, pde, u, s, derivweights, interiormap, 
         end
     end
     # Overlap handling
-    for II in setdiff(collect(CartesianIndices(eqmap)), interiormap.I[pde])
+    for II in setdiff(collect(CartesianIndices(eqmap)), interior)
         rhss = eqmap[II]
         if length(rhss) == 0
             continue
