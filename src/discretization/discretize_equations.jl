@@ -377,9 +377,20 @@ function array_lift_point_equation(eq, s; spans = Dict())
         ex => arr[(i:(i + get(spans, d, 1) - 1) for (i, d) in zip(idxs, dirs))...]
     end
     isempty(rules) && throw(ArrayFormFallback("no state element to lift"))
-    ctx = ArrayifyContext(rules, s.time)
-    lhs = arrayify(eq.lhs, ctx)
-    rhs = arrayify(eq.rhs, ctx)
+    kernels = Pair[]
+    eqlhs, eqrhs = eq.lhs, eq.rhs
+    if _time_deriv_order(eqlhs, s.time) + _time_deriv_order(eqrhs, s.time) > 0
+        slices = Dict{Any, Any}(rules)
+        eqlhs = array_point_fuse(eqlhs, slices, s.time, kernels)
+        eqrhs = array_point_fuse(eqrhs, slices, s.time, kernels)
+    end
+    ctx = ArrayifyContext(vcat(kernels, rules), s.time)
+    lhs = arrayify(eqlhs, ctx)
+    rhs = arrayify(eqrhs, ctx)
+    # A zero side is a literal; broadcasting it onto the other side would spell that
+    # side a second time.
+    is_array_valued(lhs) && array_iszero(rhs) && return lhs ~ zeros(size(Symbolics.wrap(lhs)))
+    is_array_valued(rhs) && array_iszero(lhs) && return zeros(size(Symbolics.wrap(rhs))) ~ rhs
     # Shapes may differ by trailing singletons (a lower-dimensional field); broadcast
     # each side onto the other so both carry the full shape.
     if !is_array_valued(lhs) || !is_array_valued(rhs) ||
@@ -388,6 +399,79 @@ function array_lift_point_equation(eq, s; spans = Dict())
         is_array_valued(lhs) && (rhs = array_broadcast_onto(rhs, lhs))
     end
     return lhs ~ rhs
+end
+
+"""
+    PointKernel(f)
+
+A generated scalar function of a point equation's state elements, broadcast over their
+one-element (or run) slices as a single kernel. `f` holds no expression, so the kernel is
+a bits type that GPU broadcasts accept.
+"""
+struct PointKernel{F} <: Function
+    f::F
+end
+(k::PointKernel)(args...) = k.f(args...)
+SymbolicUtils.promote_symtype(::PointKernel, ::Type...) = Real
+
+array_iszero(x) = (v = unwrap_const(safe_unwrap(x)); v isa Number && iszero(v))
+
+"""
+    array_point_fuse(ex, slices, t, kernels)
+
+`ex`, a side of a point equation with a time derivative, with the terms of each sum that
+hold no time derivative replaced by a placeholder for one [`PointKernel`](@ref)
+broadcast over the slices they read; the placeholder rules are pushed to `kernels`.
+Spelled op by op instead, every operation is its own broadcast: points whose coefficients
+vary in space do not merge into runs, and a residual of hundreds of them holds thousands
+of broadcasts, which Julia 1.13 inlines into one function too large to compile. The time
+derivatives stay outside the kernels, so `mtkcompile` can still solve for them.
+"""
+function array_point_fuse(ex, slices, t, kernels)
+    ex = safe_unwrap(ex)
+    (haskey(slices, ex) || !iscall(ex) || !array_reads_state(ex, slices)) && return ex
+    if _time_deriv_order(ex, t) == 0
+        kernel = array_point_kernel(ex, slices)
+        kernel === nothing && return ex
+        placeholder = unwrap(Symbolics.variable(:mol_kernel, length(kernels) + 1))
+        push!(kernels, placeholder => kernel)
+        return placeholder
+    end
+    args = map(safe_unwrap, arguments(ex))
+    if operation(ex) === (+)
+        free = map(a -> _time_deriv_order(a, t) == 0 && array_reads_state(a, slices), args)
+        count(free) > 1 && (args = [args[.!free]; +(args[free]...)])
+    end
+    return operation(ex)(map(a -> array_point_fuse(a, slices, t, kernels), args)...)
+end
+
+function array_reads_state(ex, slices)
+    haskey(slices, ex) && return true
+    return iscall(ex) && any(a -> array_reads_state(safe_unwrap(a), slices), arguments(ex))
+end
+
+# `ex` as one kernel broadcast, or `nothing` unless it is scalar arithmetic over state
+# elements and plain symbols (`t`, scalar parameters).
+function array_point_kernel(ex, slices)
+    array_kernel_body(ex, slices) || return nothing
+    vars = collect(Symbolics.get_variables(ex))
+    state = filter(v -> haskey(slices, v), vars)
+    free = filter(v -> !haskey(slices, v), vars)
+    ξ = [Symbolics.variable(:mol_point, k) for k in eachindex(state)]
+    body = substitute(ex, Dict(zip(state, map(unwrap, ξ))))
+    f = Symbolics.build_function(body, ξ..., free...; expression = Val{false})
+    kernel = PointKernel(RuntimeGeneratedFunctions.drop_expr(f))
+    return broadcast(kernel, (slices[v] for v in state)..., map(Symbolics.wrap, free)...)
+end
+
+# Operators (`Differential`, `Integral`), indexing other than a state element and
+# array values are left to `arrayify`, which falls back where they have no slice form.
+function array_kernel_body(ex, slices)
+    is_array_valued(ex) && return false
+    (haskey(slices, ex) || !iscall(ex)) && return true
+    op = operation(ex)
+    op isa Function && op !== getindex || return false
+    return all(a -> array_kernel_body(safe_unwrap(a), slices), arguments(ex))
 end
 
 """
