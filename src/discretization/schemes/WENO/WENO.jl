@@ -3,7 +3,7 @@ Implements the WENO scheme of Jiang and Shu.
 Specified in https://repository.library.brown.edu/studio/item/bdr:297524/PDF/ (Page 8-9)
 Implementation *heavily* inspired by https://github.com/ranocha/HyperbolicDiffEq.jl/blob/84c2d882e0c8956457c7d662bf7f18e3c27cfa3d/src/finite_volumes/weno_jiang_shu.jl by H. Ranocha.
 """
-function weno_f(u, p, t, x, dx)
+Base.@propagate_inbounds @inline function weno_f_uniform(u, p, t, x, dx::Real)
     ε = p[1]
 
     u_m2 = u[1]
@@ -56,12 +56,46 @@ function weno_f(u, p, t, x, dx)
     return (hp - hm) / dx
 end
 
+Base.@propagate_inbounds @inline function weno_f(u, p, t, x, dx::Real)
+    return weno_f_uniform(u, p, t, x, dx)
+end
+
+Base.@propagate_inbounds @inline function weno_f(u, p, t, x, dx::AbstractVector)
+    return weno_f_nonuniform(u, p, t, x, dx)
+end
+
+@noinline function weno_f(u, p, t, x, dx)
+    throw(
+        ArgumentError(
+            "WENO expects dx to be a scalar (uniform) or AbstractVector (non-uniform); got $(typeof(dx))."
+        )
+    )
+end
+
 """
-`WENOScheme` of Jiang and Shu
+    WENOScheme(; epsilon = 1.0e-6)
+
+Jiang-Shu WENO-5 advection scheme for uniform and non-uniform grids.
+
 ## Keyword Arguments
-- `epsilon`: A quantity used to prevent vanishing denominators in the scheme, defaults to `1e-6`. More sensetive problems will benefit from a smaller value. It is defined as a functional scheme.
+- `epsilon`: A quantity used to prevent vanishing denominators in the scheme, defaults to `1e-6`. More sensitive problems will benefit from a smaller value. It is defined as a functional scheme.
 """
-function WENOScheme(epsilon = 1e-6)
-    boundary_f = [nothing, nothing]
-    return FunctionalScheme{5, 0}(weno_f, boundary_f, boundary_f, false, [epsilon], name = "WENO")
+function WENOScheme(; epsilon = 1.0e-6)
+    lower = WENONonUniformBoundary[WENONonUniformBoundary{1}(), WENONonUniformBoundary{2}()]
+    upper = WENONonUniformBoundary[WENONonUniformBoundary{5}(), WENONonUniformBoundary{4}()]
+    return FunctionalScheme{5, 5}(
+        weno_f, lower, upper, true, [epsilon], name = "WENO"
+    )
+end
+
+# extent dispatch keys on typeof(lower): must stay Vector{<:WENONonUniformBoundary}.
+# Replacing lower/upper with nothing restores 2-arg extent=0 and breaks uniform routing.
+const _WENOBoundaryVec = AbstractVector{<:WENONonUniformBoundary}
+extent(::FunctionalScheme{<:Any, <:_WENOBoundaryVec}, dorder, dx::Number) = 2
+extent(::FunctionalScheme{<:Any, <:_WENOBoundaryVec}, dorder, dx::AbstractVector) = 0
+
+# Coefficient split used by array-form discretization on nonuniform grids; kernels in
+# nonuniform_weno.jl.
+function array_scheme_split(::FunctionalScheme{typeof(weno_f)})
+    return (coeffs = weno_nu_coeffs, apply = weno_nu_apply, nslots = WENO_NU_NSLOTS)
 end

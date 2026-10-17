@@ -1,4 +1,3 @@
-
 """
 # `cartesian_nonlinear_laplacian`
 
@@ -26,7 +25,9 @@ where `finitediff(u, i)` is the finite difference at the interpolated point `i` 
 
 And so on.
 """
-function cartesian_nonlinear_laplacian(expr, II, derivweights, s::DiscreteSpace, indexmap, bcmap, depvars, x, u)
+function cartesian_nonlinear_laplacian(
+        expr, II, derivweights, s::DiscreteSpace, indexmap, bcmap, depvars, x, u
+    )
     # Based on the paper https://web.mit.edu/braatzgroup/analysis_of_finite_difference_discretization_schemes_for_diffusion_in_spheres_with_variable_diffusivity.pdf
     # See scheme 1, namely the term without the 1/r dependence. See also #354 and #371 in DiffEqOperators, the previous home of this package.
     bs = filter_interfaces(bcmap[operation(u)][x])
@@ -42,40 +43,81 @@ function cartesian_nonlinear_laplacian(expr, II, derivweights, s::DiscreteSpace,
     #* Need to see how to handle this with interface boundaries
 
     cliplen = length(s, x) - 1
-    outerweights, outerstencil = get_half_offset_weights_and_stencil(D_outer, II - unitindex(N, j), s, bs, u, jx, cliplen)
-
+    outerweights,
+        outerstencil = get_half_offset_weights_and_stencil(
+        D_outer, II - unitindex(N, j), s, bs, u, jx, cliplen
+    )
 
     interface_wrap(stencil) = bwrap.(stencil, (bs,), (s,), (jx,))
 
     # Get the correct weights and stencils for this II
-    interp_weights_and_stencil = [get_half_offset_weights_and_stencil(inner_interpolater, I, s, bs, u, jx) for I in outerstencil]
-    deriv_weights_and_stencil(u, i, order) = get_half_offset_weights_and_stencil(derivweights.halfoffsetmap[1][Differential(x)^order], outerstencil[i], s, bs, u, (x2i(s, u, x), x)) 
+    interp_weights_and_stencil = [
+        get_half_offset_weights_and_stencil(
+            inner_interpolater, I, s, bs, u, jx
+        )
+            for I in outerstencil
+    ]
+    function deriv_weights_and_stencil(u, i, order)
+        return get_half_offset_weights_and_stencil(
+            derivweights.halfoffsetmap[1][Differential(x)^order],
+            outerstencil[i], s, bs, u, (x2i(s, u, x), x)
+        )
+    end
 
     # map variables to symbolically inerpolated/extrapolated expressions
-    map_vars_to_interpolated(stencil, weights) = [v => sym_dot(weights, s.discvars[v][interface_wrap(stencil)]) for v in depvars]
+    function map_vars_to_interpolated(stencil, weights)
+        return [v => sym_dot(weights, s.discvars[v][interface_wrap(stencil)]) for v in depvars]
+    end
 
     # Map parameters to interpolated values. Using simplistic extrapolation/interpolation for now as grids are uniform
     #TODO: make this more efficient
-    map_ivs_to_interpolated(stencil, weights) = safe_vcat([x => dot(weights, getindex.((s.grid[x],), getindex.(interface_wrap(stencil), (j,))))], [s.x̄[k] => s.grid[s.x̄[k]][II[k]] for k in setdiff(1:N, [j])])
+    function map_ivs_to_interpolated(stencil, weights)
+        return safe_vcat(
+            [
+                x => dot(
+                    weights, getindex.((s.grid[x],), getindex.(interface_wrap(stencil), (j,)))
+                ),
+            ],
+            transverse_iv_substitutions(s, u, II, x)
+        )
+    end
 
     # Go ham and try to discretize anything that appears inside the nonlinear laplacian
-    drules = generate_deriv_rules(II, s, depvars, derivweights, indexmap, bcmap, jx, outerstencil, deriv_weights_and_stencil, interface_wrap)
+    drules = generate_deriv_rules(
+        II, s, depvars, derivweights, indexmap, bcmap, jx,
+        outerstencil, deriv_weights_and_stencil, interface_wrap
+    )
 
     # Symbolically interpolate the expression
     interpolated_expr = map(enumerate(interp_weights_and_stencil)) do (i, weights_stencil)
         weights, stencil = weights_stencil
-        rules = vcat(mapreduce(d -> d(i), vcat, drules), map_vars_to_interpolated(stencil, weights), map_ivs_to_interpolated(stencil, weights))
-        substitute(expr*Differential(x)(u), rules)
+        rules = vcat(
+            mapreduce(d -> d(i), vcat, drules), map_vars_to_interpolated(stencil, weights),
+            map_ivs_to_interpolated(stencil, weights)
+        )
+        substitute(expr * Differential(x)(u), Dict(rules))
     end
 
     # multiply the inner finite difference by the interpolated expression, and finally take the outer finite difference
     return sym_dot(outerweights, interpolated_expr)
 end
 
-function generate_deriv_rules(II, s::DiscreteSpace, depvars, derivweights, indexmap, bmap, jx,  outerstencil, deriv_weights_and_stencil, interface_wrap)
+"""
+Substitution rules for independent variables that are not the derivative
+direction `x`. Values are taken from the argument-ordered index `II` via
+`x2i`, never from the hash-order-dependent `s.x̄` permutation.
+"""
+function transverse_iv_substitutions(s::DiscreteSpace, u, II, x)
+    return [x_ => s.grid[x_][II[x2i(s, u, x_)]] for x_ in ivs(u, s) if !isequal(x_, x)]
+end
+
+function generate_deriv_rules(
+        II, s::DiscreteSpace, depvars, derivweights, indexmap, bmap,
+        jx, outerstencil, deriv_weights_and_stencil, interface_wrap
+    )
     # Generate rules for the derivatives of the variables
     j, x = jx
-    mapreduce(vcat, depvars) do u
+    return mapreduce(vcat, depvars) do u
         mapreduce(vcat, ivs(u, s)) do y
             let orders = derivweights.orders[x]
                 map(vcat(1, orders)) do order
@@ -84,16 +126,22 @@ function generate_deriv_rules(II, s::DiscreteSpace, depvars, derivweights, index
                     if isequal(x, y)
                         (i) -> begin
                             let (weights, stencil) = deriv_weights_and_stencil(u, i, order)
-                                [(Differential(x)^order)(u) => sym_dot(weights, s.discvars[u][interface_wrap(stencil)])]
+                                [
+                                    (Differential(x)^order)(u) => sym_dot(
+                                        weights, s.discvars[u][interface_wrap(stencil)]
+                                    ),
+                                ]
                             end
                         end
                     else
                         # Otherwise, we will use the usual rules shifted
                         (i) -> begin
                             let II = outerstencil[i]
-                                central_deriv_rules_cartesian = generate_cartesian_rules(II, s, depvars, derivweights, bmap, indexmap, nothing)
+                                central_deriv_rules_cartesian = generate_cartesian_rules(
+                                    II, s, depvars, derivweights, bmap, indexmap, nothing
+                                )
                                 central_deriv_rules_cartesian
-                            end   
+                            end
                         end
                     end
                 end
@@ -101,25 +149,153 @@ function generate_deriv_rules(II, s::DiscreteSpace, depvars, derivweights, index
         end
     end
 end
-                
 
-
+"""
+Evaluate `ex` at the grid point `II` by substituting dependent variables with their
+discrete counterparts and independent variables with their grid values. Rules that
+replace a whole matched term must pass every captured factor through this, as the
+general variable/grid substitution rules never reach a rule's output.
+"""
 function replacevals(ex, s, u, depvars, II, indexmap)
     rules = valmaps(s, u, depvars, II, indexmap)
-    substitute(ex, rules)
+    return substitute(ex, Dict(rules))
 end
 
-@inline function generate_nonlinlap_rules(II::CartesianIndex, s::DiscreteSpace, depvars, derivweights::DifferentialDiscretizer, bcmap, indexmap, terms)
-    rules = reduce(safe_vcat, [vec([@rule *(~~c, $(Differential(x))(*(~~a, $(Differential(x))(u), ~~b)), ~~d) => *(~c..., cartesian_nonlinear_laplacian(*(~a..., ~b...), Idx(II, s, u, indexmap), derivweights, s, indexmap, bcmap, depvars, x, u), ~d...) for x in ivs(u, s)]) for u in depvars], init = [])
+function replacevals(exs::AbstractVector, s, u, depvars, II, indexmap)
+    return map(ex -> replacevals(ex, s, u, depvars, II, indexmap), exs)
+end
 
-    rules = safe_vcat(rules, reduce(safe_vcat, [vec([@rule $(Differential(x))(*(~~a, $(Differential(x))(u), ~~b)) => cartesian_nonlinear_laplacian(*(~a..., ~b...), Idx(II, s, u, indexmap), derivweights, s, indexmap, bcmap, depvars, x, u) for x in ivs(u, s)]) for u in depvars], init = []))
+@inline function generate_nonlinlap_rules(
+        II::CartesianIndex, s::DiscreteSpace, depvars,
+        derivweights::DifferentialDiscretizer, bcmap, indexmap, terms
+    )
+    rules = reduce(
+        safe_vcat,
+        [
+            vec(
+                [
+                    @rule *(
+                        ~~c,
+                        $(Differential(x))(*(~~a, $(Differential(x))(u), ~~b)),
+                        ~~d
+                    ) => *(
+                        replacevals(~c, s, u, depvars, II, indexmap)...,
+                        cartesian_nonlinear_laplacian(
+                            *(~a..., ~b...), Idx(II, s, u, indexmap),
+                            derivweights, s, indexmap, bcmap, depvars, x, u
+                        ),
+                        replacevals(~d, s, u, depvars, II, indexmap)...
+                    ) for x in ivs(u, s)
+                ]
+            ) for u in depvars
+        ],
+        init = []
+    )
 
-    rules = safe_vcat(rules, reduce(safe_vcat, [vec([@rule ($(Differential(x))($(Differential(x))(u) / ~a)) => cartesian_nonlinear_laplacian(1 / ~a, Idx(II, s, u, indexmap), derivweights, s, indexmap, bcmap, depvars, x, u) for x in ivs(u, s)]) for u in depvars], init = []))
+    rules = safe_vcat(
+        rules,
+        reduce(
+            safe_vcat,
+            [
+                vec(
+                    [
+                        @rule $(Differential(x))(
+                            *(
+                                ~~a,
+                                $(Differential(x))(u),
+                                ~~b
+                            )
+                        ) => cartesian_nonlinear_laplacian(
+                            *(~a..., ~b...), Idx(II, s, u, indexmap),
+                            derivweights, s, indexmap, bcmap, depvars, x, u
+                        ) for x in ivs(u, s)
+                    ]
+                )
+                    for u in depvars
+            ],
+            init = []
+        )
+    )
 
-    rules = safe_vcat(rules, reduce(safe_vcat, [vec([@rule *(~~b, ($(Differential(x))($(Differential(x))(u) / ~a)), ~~c) => *(~b..., ~c..., cartesian_nonlinear_laplacian(1 / ~a, Idx(II, s, u, indexmap), derivweights, s, indexmapp, bcmap, depvars, x, u)) for x in ivs(u, s)]) for u in depvars], init = []))
+    rules = safe_vcat(
+        rules,
+        reduce(
+            safe_vcat,
+            [
+                vec(
+                    [
+                        @rule (
+                            $(Differential(x))(
+                                $(Differential(x))(u) /
+                                    ~a
+                            )
+                        ) => cartesian_nonlinear_laplacian(
+                            1 / ~a, Idx(II, s, u, indexmap), derivweights,
+                            s, indexmap, bcmap, depvars, x, u
+                        ) for x in ivs(u, s)
+                    ]
+                )
+                    for u in depvars
+            ],
+            init = []
+        )
+    )
 
-    rules = safe_vcat(rules, reduce(safe_vcat, [vec([@rule /(*(~~b, ($(Differential(x))(*(~~a, $(Differential(x))(u), ~~d))), ~~c), ~e) => /(*(~b..., ~c..., cartesian_nonlinear_laplacian(*(~a..., ~d...), Idx(II, s, u, indexmap), derivweights, s, indexmap, bcmap, depvars, x, u)), replacevals(~e, s, u, depvars, II, indexmap)) for x in ivs(u, s)]) for u in depvars], init = []))
+    rules = safe_vcat(
+        rules,
+        reduce(
+            safe_vcat,
+            [
+                vec(
+                    [
+                        @rule *(
+                            ~~b,
+                            ($(Differential(x))($(Differential(x))(u) / ~a)),
+                            ~~c
+                        ) => *(
+                            replacevals(~b, s, u, depvars, II, indexmap)...,
+                            replacevals(~c, s, u, depvars, II, indexmap)...,
+                            cartesian_nonlinear_laplacian(
+                                1 / ~a, Idx(II, s, u, indexmap), derivweights,
+                                s, indexmap, bcmap, depvars, x, u
+                            )
+                        ) for x in ivs(u, s)
+                    ]
+                )
+                    for u in depvars
+            ],
+            init = []
+        )
+    )
 
+    rules = safe_vcat(
+        rules,
+        reduce(
+            safe_vcat,
+            [
+                vec(
+                    [
+                        @rule /(
+                            *(~~b, ($(Differential(x))(*(~~a, $(Differential(x))(u), ~~d))), ~~c),
+                            ~e
+                        ) => /(
+                            *(
+                                replacevals(~b, s, u, depvars, II, indexmap)...,
+                                replacevals(~c, s, u, depvars, II, indexmap)...,
+                                cartesian_nonlinear_laplacian(
+                                    *(~a..., ~d...), Idx(II, s, u, indexmap),
+                                    derivweights, s, indexmap, bcmap, depvars, x, u
+                                )
+                            ),
+                            replacevals(~e, s, u, depvars, II, indexmap)
+                        ) for x in ivs(u, s)
+                    ]
+                )
+                    for u in depvars
+            ],
+            init = []
+        )
+    )
 
     nonlinlap_rules = []
     for t in terms
