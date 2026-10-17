@@ -110,7 +110,6 @@ function PDEBase.discretize_equation!(
         eqvar, bcmap, depvars, s::DiscreteSpace, derivweights, indexmap,
         discretization::MOLFiniteDifference
     )
-    nbceqs0 = length(disc_state.bceqs)
     # Boundary handling is shared with the pointwise fallback.
     boundaryvalfuncs = generate_boundary_val_funcs(
         s, depvars, bcmap, indexmap, derivweights
@@ -184,9 +183,7 @@ function PDEBase.discretize_equation!(
         end
     end
 
-    newbceqs = (nbceqs0 + 1):length(disc_state.bceqs)
-    disc_state.bceqs[newbceqs] = map(array_noinline_broadcasts, disc_state.bceqs[newbceqs])
-    return vcat!(disc_state.eqs, map(array_noinline_broadcasts, eqs))
+    return vcat!(disc_state.eqs, eqs)
 end
 
 """
@@ -427,7 +424,7 @@ function array_lift_equations(eqs, s)
     for x in s.x̄
         runs = array_merge_translates(runs, safe_unwrap(x), arrays)
     end
-    return mapreduce(vcat, runs; init = Equation[]) do run
+    lifted = mapreduce(vcat, runs; init = Equation[]) do run
         length(run.eqs) == 1 && return [array_lift_or_keep(only(run.eqs), s)]
         try
             return [array_lift_point_equation(first(run.eqs), s; spans = run.spans)]
@@ -436,6 +433,8 @@ function array_lift_equations(eqs, s)
             return map(eq -> array_lift_or_keep(eq, s), run.eqs)
         end
     end
+    # Hundreds of these per system: their broadcasts must not inline (`mol_broadcast`).
+    return map(array_noinline_broadcasts, lifted)
 end
 
 # Merge runs that are consecutive translates along `x`.
@@ -3174,9 +3173,13 @@ end
 
 `broadcast` behind a call Julia does not inline. Since 1.13 (JuliaLang/julia#61776) the
 generic `broadcast` method is `@inline`, so a residual of thousands of slice broadcasts
-inlines every loop into one function that takes hours to compile (JuliaLang/julia#63872).
+inlines every loop into one function that takes hours to compile. Applied only to the
+lifted point and strip equations (`array_lift_equations`); set
+`NOINLINE_BROADCASTS = false` to emit plain `broadcast` there again.
 """
+# Exists only to sidestep JuliaLang/julia#63872 (1.13 inlines every `broadcast` call).
 @noinline mol_broadcast(f, As...) = broadcast(f, As...)
+const NOINLINE_BROADCASTS = true # the one switch: `false` emits plain `broadcast`
 
 # Rebuilt (by `substitute`) and scalarized exactly as the `broadcast` it wraps.
 function SymbolicUtils.maketerm(
@@ -3197,6 +3200,7 @@ end
 [`mol_broadcast`](@ref).
 """
 function array_noinline_broadcasts(eq::Equation)
+    NOINLINE_BROADCASTS || return eq
     return Equation(array_noinline_broadcasts(eq.lhs), array_noinline_broadcasts(eq.rhs))
 end
 function array_noinline_broadcasts(ex)
