@@ -1,33 +1,81 @@
+# Typed complex fields are Complex{Num} of the form real(u(...)) + im*imag(u(...)).
+# Reject conjugates and other transformed keys that share only the real component.
+function _canonical_complex_dv(key::Complex{Num})
+    re = Symbolics.unwrap(real(key))
+    if !(iscall(re) && operation(re) === real)
+        error("Invalid indexing of solution. $key is not a canonical complex dependent variable.")
+    end
+    inner = only(arguments(re))
+    canonical = Complex(Num(real(inner)), Num(imag(inner)))
+    isequal(key, canonical) || error(
+        "Invalid indexing of solution. $key is not a canonical complex dependent variable."
+    )
+    return inner
+end
 
-function (sol::SciMLBase.PDESolution{T,N,S,D})(args...;
-    dv=nothing) where {T,N,S,D<:MOLMetadata}
-    # Colon reconstructs on gridpoints
-    args = map(enumerate(args)) do (i, arg)
+# Colon reconstructs on gridpoints. The arguments follow `sol.ivs`, or the arguments of `dv`
+# when it is given.
+function _grid_args(sol, args, dv = nothing)
+    any(arg -> arg isa Colon, args) || return args
+    is = dv === nothing ? eachindex(sol.ivs) : _iv_indices(sol, dv)
+    return map(enumerate(args)) do (i, arg)
         if arg isa Colon
-            sol.ivdomain[i]
+            sol.ivdomain[is[i]]
         else
             arg
         end
     end
-    # If no dv is given, return interpolations for every dv
-    if dv === nothing
-        @assert length(args) == length(sol.ivs) "Not enough arguments for the number of independent variables  including time where appropriate, got $(length(args)) expected $(length(sol.ivs))."
-        return map(sol.dvs) do dv
-            arg_ivs = arguments(safe_unwrap(dv))
-            is = map(arg_ivs) do arg_iv
-                i = findfirst(isequal(arg_iv), sol.ivs)
-                @assert i !== nothing "Independent variable $(arg_iv) in dependent variable $(dv) not found in the solution."
-                i
-            end
-
-            sol.interp[dv](args[is]...)
-        end
-    end
-    return sol.interp[dv](args...)
 end
 
-Base.@propagate_inbounds function Base.getindex(A::SciMLBase.PDESolution{T,N,S,D},
-    sym) where {T,N,S,D<:MOLMetadata}
+# The positions in `sol.ivs` of the arguments of `dv`; `u(t, x)[i]` has those of `u(t, x)`.
+function _iv_indices(sol, dv)
+    s = safe_unwrap(dv)
+    operation(s) === getindex && (s = first(arguments(s)))
+    return map(arguments(s)) do arg_iv
+        i = findfirst(isequal(arg_iv), sol.ivs)
+        @assert i !== nothing "Independent variable $(arg_iv) in dependent variable $(dv) not found in the solution."
+        i
+    end
+end
+
+# The arguments of `dv` among `args`, which are given in the order of `sol.ivs`
+function _dv_args(sol, dv, args)
+    @assert length(args) == length(sol.ivs) "Not enough arguments for the number of independent variables, including time where appropriate, got $(length(args)) expected $(length(sol.ivs))."
+    return args[_iv_indices(sol, dv)]
+end
+
+function _pde_call(sol, args...; dv = nothing)
+    if dv isa Complex{Num}
+        dv = _canonical_complex_dv(dv)
+    end
+    args = _grid_args(sol, args, dv)
+    # If no dv is given, return interpolations for every dv
+    if dv === nothing
+        return map(dv -> sol.interp[dv](_dv_args(sol, dv, args)...), sol.dvs)
+    end
+    if iscomplex(sol) && !any(isequal(safe_unwrap(dv)), sol.dvs)
+        symargs = arguments(safe_unwrap(dv))
+        redv, imdv = sol.disc_data.complexmap[operation(safe_unwrap(dv))]
+        return sol.interp[Num(redv(symargs...))](args...) .+
+            im * sol.interp[Num(imdv(symargs...))](args...)
+    else
+        return sol.interp[dv](args...)
+    end
+end
+
+function (sol::SciMLBase.PDETimeSeriesSolution{T, N, S, D})(
+        args::Vararg{Union{Num, Number, AbstractArray, Colon}}; dv = nothing
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_call(sol, args...; dv)
+end
+
+function (sol::SciMLBase.PDENoTimeSolution{T, N, S, D})(
+        args::Vararg{Union{Num, Number, AbstractArray, Colon}}; dv = nothing
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_call(sol, args...; dv)
+end
+
+function _pde_getindex(A, sym)
     iv = nothing
     dv = nothing
     iiv = sym_to_index(sym, A.ivs)
@@ -37,20 +85,50 @@ Base.@propagate_inbounds function Base.getindex(A::SciMLBase.PDESolution{T,N,S,D
     idv = sym_to_index(sym, A.dvs)
     if idv !== nothing
         dv = A.dvs[idv]
-    elseif any(isequal(safe_unwrap(sym)), safe_unwrap.(collect(values(A.disc_data.discretespace.vars.replaced_vars))))
+    elseif any(
+            isequal(safe_unwrap(sym)),
+            safe_unwrap.(collect(values(A.disc_data.discretespace.vars.replaced_vars)))
+        )
         dv = sym
     end
-    if SciMLBase.issymbollike(sym) && iv !== nothing && isequal(sym, iv)
+    return if symbolic_type(sym) != NotSymbolic() && iv !== nothing && isequal(sym, iv)
         A.ivdomain[iiv]
-    elseif SciMLBase.issymbollike(sym) && dv !== nothing && isequal(sym, dv)
+    elseif symbolic_type(sym) != NotSymbolic() && dv !== nothing && isequal(sym, dv)
         A.u[sym]
+    elseif iscomplex(A) && iscall(safe_unwrap(sym))
+        symargs = arguments(safe_unwrap(sym))
+        redv, imdv = A.disc_data.complexmap[operation(safe_unwrap(sym))]
+        A.u[Num(redv(symargs...))] .+ im * A.u[Num(imdv(symargs...))]
     else
         error("Invalid indexing of solution. $sym not found in solution.")
     end
 end
 
-Base.@propagate_inbounds function Base.getindex(A::SciMLBase.PDESolution{T,N,S,D}, sym,
-    args...) where {T,N,S,D<:MOLMetadata}
+Base.@propagate_inbounds function Base.getindex(
+        A::SciMLBase.PDETimeSeriesSolution{T, N, S, D}, sym::Union{Num, Symbol}
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_getindex(A, sym)
+end
+
+Base.@propagate_inbounds function Base.getindex(
+        A::SciMLBase.PDETimeSeriesSolution{T, N, S, D}, sym::Complex{Num}
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_getindex(A, _canonical_complex_dv(sym))
+end
+
+Base.@propagate_inbounds function Base.getindex(
+        A::SciMLBase.PDENoTimeSolution{T, N, S, D}, sym::Union{Num, Symbol}
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_getindex(A, sym)
+end
+
+Base.@propagate_inbounds function Base.getindex(
+        A::SciMLBase.PDENoTimeSolution{T, N, S, D}, sym::Complex{Num}
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_getindex(A, _canonical_complex_dv(sym))
+end
+
+function _pde_getindex(A, sym, args...)
     iv = nothing
     dv = nothing
     iiv = sym_to_index(sym, A.ivs)
@@ -61,16 +139,77 @@ Base.@propagate_inbounds function Base.getindex(A::SciMLBase.PDESolution{T,N,S,D
     if idv !== nothing
         dv = A.dvs[idv]
     end
-    if SciMLBase.issymbollike(sym) && iv !== nothing && isequal(sym, iv)
-        A.ivdomains[iiv][args...]
-    elseif SciMLBase.issymbollike(sym) && dv !== nothing && isequal(sym, dv)
+    return if symbolic_type(sym) != NotSymbolic() && iv !== nothing && isequal(sym, iv)
+        A.ivdomain[iiv][args...]
+    elseif symbolic_type(sym) != NotSymbolic() && dv !== nothing && isequal(sym, dv)
         A.u[sym][args...]
+    elseif iscomplex(A) && symbolic_type(sym) != NotSymbolic() && iscall(safe_unwrap(sym))
+        symargs = arguments(safe_unwrap(sym))
+        redv, imdv = A.disc_data.complexmap[operation(safe_unwrap(sym))]
+        A.u[Num(redv(symargs...))][args...] .+ im * A.u[Num(imdv(symargs...))][args...]
     else
         error("Invalid indexing of solution")
     end
 end
 
-function Base.display(pdesol::SciMLBase.PDESolution{T,N,S,D}) where {T, N, S, D <: MOLMetadata}
+Base.@propagate_inbounds function Base.getindex(
+        A::SciMLBase.PDETimeSeriesSolution{T, N, S, D},
+        sym::Union{Num, Symbol}, args...
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_getindex(A, sym, args...)
+end
+
+Base.@propagate_inbounds function Base.getindex(
+        A::SciMLBase.PDENoTimeSolution{T, N, S, D},
+        sym::Union{Num, Symbol}, args...
+    ) where {T, N, S, D <: MOLMetadata}
+    return _pde_getindex(A, sym, args...)
+end
+
+# The PDE solution stores `u` as a `Dict` of dependent variable => array, so the generic
+# `AbstractVectorOfArray` size/length machinery (which iterates `sol.u` expecting a vector
+# of arrays) does not apply. A MOL time series solution is indexed over its saved time
+# points, so report length/size/ndims accordingly.
+Base.length(
+    A::SciMLBase.PDETimeSeriesSolution{T, N, S, D}
+) where {T, N, S, D <: MOLMetadata} = length(A.t)
+
+Base.size(
+    A::SciMLBase.PDETimeSeriesSolution{T, N, S, D}
+) where {T, N, S, D <: MOLMetadata} = (length(A.t),)
+
+Base.ndims(
+    ::SciMLBase.PDETimeSeriesSolution{T, N, S, D}
+) where {T, N, S, D <: MOLMetadata} = 1
+
+Base.axes(
+    A::SciMLBase.PDETimeSeriesSolution{T, N, S, D}
+) where {T, N, S, D <: MOLMetadata} = (Base.OneTo(length(A.t)),)
+
+Base.firstindex(
+    ::SciMLBase.PDETimeSeriesSolution{T, N, S, D}
+) where {T, N, S, D <: MOLMetadata} = 1
+
+Base.lastindex(
+    A::SciMLBase.PDETimeSeriesSolution{T, N, S, D}
+) where {T, N, S, D <: MOLMetadata} = length(A.t)
+
+# `end` in `sol[dv, inds...]` asks the solution, not the field, for its axes.
+function Base.lastindex(
+        ::SciMLBase.PDESolution{T, N, S, D}, d::Integer
+    ) where {T, N, S, D <: MOLMetadata}
+    throw(
+        ArgumentError(
+            "`end` cannot be resolved in `sol[dv, inds...]`; index the field instead: `sol[dv][end, :]`."
+        )
+    )
+end
+
+function Base.display(
+        pdesol::SciMLBase.PDESolution{
+            T, N, S, D,
+        }
+    ) where {T, N, S, D <: MOLMetadata}
     sys = pdesol.disc_data.pdesys
     println("PDESolution:")
     println("  Return Code:")
@@ -82,11 +221,17 @@ function Base.display(pdesol::SciMLBase.PDESolution{T,N,S,D}) where {T, N, S, D 
     println("  Domain:")
     for (i, xdisc) in enumerate(pdesol.ivdomain)
         x = pdesol.ivs[i]
-        if all([xdisc[i+1] - xdisc[i] ≈ xdisc[2] - xdisc[1] for i in 1:length(xdisc)-1])
+        if all(
+                [
+                    xdisc[i + 1] - xdisc[i] ≈ xdisc[2] - xdisc[1]
+                        for i in 1:(length(xdisc) - 1)
+                ]
+            )
             step = xdisc[2] - xdisc[1]
             println("    $(x) ∈ ($(xdisc[1]), $(xdisc[end])) with $(length(xdisc)) points, step size $(step)")
         else
-            avgstep = sum([xdisc[i+1] - xdisc[i] for i in 1:length(xdisc)-1]) / (length(xdisc)-1)
+            avgstep = sum([xdisc[i + 1] - xdisc[i] for i in 1:(length(xdisc) - 1)]) /
+                (length(xdisc) - 1)
             println("    $(x) ∈ ($(xdisc[1]), $(xdisc[end])) with $(length(xdisc)) non-uniform points. average step size $(avgstep)")
         end
     end
@@ -94,7 +239,7 @@ function Base.display(pdesol::SciMLBase.PDESolution{T,N,S,D}) where {T, N, S, D 
     println("    Equations:")
     latexify(sys.eqs) |> display
     println("    Boundary/Initial Conditions:")
-    latexify(sys.bcs) |> display
+    return latexify(sys.bcs) |> display
 end
 
 #=

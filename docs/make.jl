@@ -5,25 +5,24 @@ cp("./docs/Project.toml", "./docs/src/assets/Project.toml", force = true)
 
 # Make sure that plots don't throw a bunch of warnings / errors!
 ENV["GKSwstype"] = "100"
+ENV["JULIA_DEBUG"] = Documenter
 
 include("pages.jl")
 
-makedocs(sitename = "MethodOfLines.jl",
-         authors = "Chris Rackauckas, Alex Jones et al.",
-         clean = true,
-         doctest = false,
-         strict = [
-             :doctest,
-             :linkcheck,
-             :parse_error,
-             :example_block,
-             # Other available options are
-             # :autodocs_block, :cross_references, :docs_block, :eval_block, :example_block, :footnote, :meta_block, :missing_docs, :setup_block,
-         ],
-         modules = [MethodOfLines],
-         format = Documenter.HTML(analytics = "UA-90474609-3",
-                                  assets = ["assets/favicon.ico"],
-                                  canonical = "https://docs.sciml.ai/MethodOfLines/stable/"),
-         pages = pages)
+makedocs(
+    sitename = "MethodOfLines.jl",
+    authors = "Chris Rackauckas, Alex Jones et al.",
+    clean = true, linkcheck = true,
+    modules = [MethodOfLines],
+    linkcheck_ignore = [
+        # StackExchange returns 403 for automated requests
+        "https://math.stackexchange.com/questions/4333513/nonuniform-finite-difference-grid-for-a-pde-where-the-x-points-depends-on-y-coor",
+    ],
+    format = Documenter.HTML(
+        assets = ["assets/favicon.ico"],
+        canonical = "https://docs.sciml.ai/MethodOfLines/stable/"
+    ),
+    pages = pages
+)
 
 deploydocs(repo = "github.com/SciML/MethodOfLines.jl"; push_preview = true)

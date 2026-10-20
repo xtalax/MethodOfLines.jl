@@ -1,0 +1,244 @@
+# DAEProblem construction, preserving array (slice-form) equations at the System level.
+#
+# `mtkcompile` scalarizes array equations before codegen: an `ODEProblem` needs
+# `D(x) = f(x)`, and isolating the derivative is structural simplification.
+# MethodOfLines already emits residuals `D(u) - f ~ 0`, which is exactly the
+# implicit-DAE form `DAEProblem` consumes, so this path skips `mtkcompile` and the
+# array equations survive on the `System`. Residual codegen expands one entry per
+# unknown (MethodOfLines.jl#691; ModelingToolkit.jl#5139).
+
+"""
+    BrownFullBasicInitUnsafeError(offenders)
+
+Raised by `DAEProblem(::PDESystem, ::MOLFiniteDifference)` when the discretized system
+carries initialization equations that `BrownFullBasicInit()` would silently discard, so no
+default initialization algorithm can be chosen safely. `offenders` pairs each such
+equation with the reason it is not honored.
+"""
+struct BrownFullBasicInitUnsafeError <: Exception
+    offenders::Vector{Pair{Equation, String}}
+end
+
+function Base.showerror(io::IO, e::BrownFullBasicInitUnsafeError)
+    print(
+        io,
+        """
+        MethodOfLines cannot build a `DAEProblem` for this system without `mtkcompile`.
+
+        `BrownFullBasicInit()` is the only initialization algorithm that reproduces the
+        `discretize` (`ODEProblem` + `mtkcompile`) result on the array-equation path. It
+        takes the differential variables' initial values as given and solves for the
+        algebraic variables and the derivatives, so it would silently ignore these
+        initialization equations:
+        """
+    )
+    for (eq, reason) in e.offenders
+        print(io, "\n  ", eq, "\n    ", reason)
+    end
+    print(
+        io,
+        """
+
+
+        Use `discretize(pdesys, disc)` instead. That path runs `mtkcompile`, which honors
+        these constraints, at the cost of scalarizing the array equations: the slice form
+        cannot currently be preserved for this system.
+        """
+    )
+    return
+end
+
+_issym(ex) = ex isa SymbolicUtils.BasicSymbolic && iscall(ex)
+
+function _has_differential(ex)
+    ex = safe_unwrap(ex)
+    _issym(ex) || return false
+    operation(ex) isa Differential && return true
+    return any(_has_differential, arguments(ex))
+end
+
+# The order of the highest derivative with respect to `t` appearing in `ex`.
+function _time_deriv_order(ex, t)
+    ex = safe_unwrap(ex)
+    _issym(ex) || return 0
+    op = operation(ex)
+    inner = maximum(a -> _time_deriv_order(a, t), arguments(ex); init = 0)
+    return op isa Differential && isequal(op.x, t) ? inner + op.order : inner
+end
+
+# The unknowns of `sys` that appear under a time derivative: a scalar unknown maps to
+# `true`, an array unknown to the mask of its differentiated elements. The rest are
+# algebraic.
+function differential_unknowns(sys, unks)
+    out = Dict{Any, Any}()
+    for part in keys(time_differentiated(get_eqs(sys), safe_unwrap(ModelingToolkitBase.get_iv(sys))))
+        if part in unks
+            out[part] = is_array_valued(part) ? trues(size(part)) : true
+            continue
+        end
+        unknown, idxs = _parent_and_indices(part)
+        (idxs !== nothing && unknown in unks) || continue
+        mask = get!(() -> falses(size(unknown)), out, unknown)
+        mask[_region(idxs)] .= true
+    end
+    return out
+end
+
+# Whether `x`, an unknown or an element or slice of one, is differential throughout, or
+# `nothing` if it is none of these.
+function _is_differential(x, diffvars, unks)
+    if x in unks
+        d = get(diffvars, x, false)
+        return d isa Bool ? d : all(d)
+    end
+    unknown, idxs = _parent_and_indices(x)
+    (idxs !== nothing && unknown in unks) || return nothing
+    d = get(diffvars, unknown, false)
+    return d isa Bool ? d : all(view(d, _region(idxs)))
+end
+
+# An expression may mention an unknown, or an element or slice of one.
+function _mentions_unknown(ex, unks)
+    for v in Symbolics.get_variables(ex)
+        v = safe_unwrap(v)
+        v in unks && return true
+        unknown, idxs = _parent_and_indices(v)
+        idxs !== nothing && unknown in unks && return true
+    end
+    return false
+end
+
+"""
+    brown_init_offenders(sys)
+
+Return the initialization equations of `sys` that `BrownFullBasicInit()` would not honor,
+each paired with the reason, and an empty vector when the algorithm is safe for `sys`.
+
+`BrownFullBasicInit()` holds the differential variables at their given values and solves
+for everything else, so an initialization equation survives it only when it fixes
+differential unknowns (an unknown, or an element or slice of one) to values involving no
+other unknown. Everything else is reported, including equations this predicate cannot
+classify.
+"""
+function brown_init_offenders(sys)
+    ieqs = initialization_equations(sys)
+    offenders = Pair{Equation, String}[]
+    isempty(ieqs) && return offenders
+    unks = Set{Any}(safe_unwrap.(get_unknowns(sys)))
+    diffvars = differential_unknowns(sys, unks)
+    for eq in ieqs
+        reason = _brown_init_offence(eq, diffvars, unks)
+        reason === nothing || push!(offenders, eq => reason)
+    end
+    return offenders
+end
+
+function _brown_init_offence(eq, diffvars, unks)
+    if _has_differential(eq.lhs) || _has_differential(eq.rhs)
+        return "constrains a time derivative, which BrownFullBasicInit solves for."
+    end
+    lhs = safe_unwrap(eq.lhs)
+    differential = _is_differential(lhs, diffvars, unks)
+    if differential === nothing
+        return "does not fix a single unknown of the discretized system, so it cannot be checked against what BrownFullBasicInit holds fixed."
+    end
+    if !differential
+        return "constrains $lhs, which is algebraic rather than differential; BrownFullBasicInit solves for algebraic variables instead of honoring a given value."
+    end
+    if _mentions_unknown(eq.rhs, unks)
+        return "relates $lhs to other unknowns; BrownFullBasicInit fixes each differential unknown independently and does not enforce the relation."
+    end
+    return nothing
+end
+
+# `varmap_to_vars` needs a value for every unknown and every derivative of an unknown. The
+# discretized initial conditions cover the grid points of every variable given one; the
+# rest are quantities the initialization solves for, for which this is only a guess.
+function _dae_operating_point(sys, u0, t)
+    D = Differential(t)
+    op = Dict{Any, Any}()
+    for x in get_unknowns(sys)
+        x = safe_unwrap(x)
+        op[x] = _zero_value(x)
+        op[D(x)] = _zero_value(x)
+    end
+    for (k, v) in u0
+        op[safe_unwrap(k)] = v
+    end
+    return op
+end
+
+_zero_value(x) = is_array_valued(x) ? zeros(size(x)) : 0.0
+
+"""
+    DAEProblem(pdesys::PDESystem, discretization::MOLFiniteDifference; kwargs...)
+
+Discretize `pdesys` and build a `DAEProblem` from the residuals MethodOfLines emits,
+without running `mtkcompile`. The array equations survive at the `System` level, which
+`mtkcompile` would scalarize. Residual code generation expands one entry per unknown,
+so compile cost grows with resolution (see MethodOfLines.jl#691;
+ModelingToolkit.jl#5139).
+
+`initializealg` defaults to `BrownFullBasicInit()`, which is the only algorithm that
+reproduces the [`discretize`](@ref) result here, and is chosen only when the discretized
+system's initialization equations are ones it honors; otherwise a
+[`BrownFullBasicInitUnsafeError`](@ref) is raised naming the offending equations. Passing
+`initializealg` explicitly overrides both the default and that check.
+
+The solution is a `PDETimeSeriesSolution`, the same wrapper [`discretize`](@ref)
+produces, so it is indexed and interpolated by the `PDESystem`'s own variables:
+`sol[u(t, x)]`, `sol(t, x)`.
+"""
+function SciMLBase.DAEProblem(
+        pdesys::PDESystem, discretization::MOLDiscretization;
+        initializealg = nothing, build_initializeprob = false, kwargs...
+    )
+    sys, tspan = SciMLBase.symbolic_discretize(pdesys, discretization)
+    if tspan === nothing
+        throw(
+            ArgumentError(
+                "`DAEProblem` requires a time variable; pass one to `MOLFiniteDifference`, or use `discretize` for the `NonlinearProblem` a time-independent system discretizes to."
+            )
+        )
+    end
+    return _dae_problem(
+        sys, tspan, discretization; initializealg, build_initializeprob, kwargs...
+    )
+end
+
+"""
+    _dae_problem(sys, tspan, discretization; kwargs...)
+
+Build the `DAEProblem` from an already discretized system. Shared by
+`DAEProblem(::PDESystem, ::MOLFiniteDifference)` and [`discretize`](@ref) so that the
+system is discretized once.
+"""
+function _dae_problem(
+        sys, tspan, discretization::MOLDiscretization;
+        initializealg = nothing, build_initializeprob = false, kwargs...
+    )
+    sys = complete(sys)
+    if initializealg === nothing
+        offenders = brown_init_offenders(sys)
+        isempty(offenders) || throw(BrownFullBasicInitUnsafeError(offenders))
+        initializealg = DiffEqBase.BrownFullBasicInit()
+    end
+    t = safe_unwrap(get_time(discretization))
+    maxorder = maximum(
+        eq -> max(_time_deriv_order(eq.lhs, t), _time_deriv_order(eq.rhs, t)),
+        get_eqs(sys); init = 0
+    )
+    if maxorder > 1
+        throw(
+            ArgumentError(
+                "The discretized system is of order $maxorder in $t. A `DAEProblem` is first order, and the order reduction that would fix this is part of `mtkcompile`, which scalarizes the array equations. Use `discretize(pdesys, discretization)`."
+            )
+        )
+    end
+    metadata = getmetadata(sys, ModelingToolkit.ProblemTypeCtx, nothing)
+    op = _dae_operating_point(sys, metadata.u0, t)
+    return DAEProblem(
+        sys, op, tspan; initializealg, build_initializeprob,
+        discretization.kwargs..., kwargs...
+    )
+end
